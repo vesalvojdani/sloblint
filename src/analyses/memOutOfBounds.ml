@@ -33,8 +33,34 @@ struct
   let intdom_of_int x =
     ID.of_int (Cilfacade.ptrdiff_ikind ()) (Z.of_int x)
 
+  (** The size of [typ] in bytes, or [`Top] if [typ] has no size at compile time, as a variable-length array does. *)
   let size_of_type_in_bytes typ =
-    intdom_of_int (Cilfacade.bytesSizeOf typ)
+    match Cilfacade.bytesSizeOf typ with
+    | size -> `Lifted (intdom_of_int size)
+    | exception SizeOfError _ -> `Top
+
+  (** The size in bytes of an object of type [typ] whose value is [value].
+      For a variable-length array type, the lengths are those in the array values of [value], which base records when the array is declared.
+      [`Top] if a length is not known. *)
+  let rec size_of_value_in_bytes man typ (value: ValueDomain.Compound.t) =
+    match Cil.unrollType typ, value with
+    | TArray (item_typ, _, _), Array arr when Cilfacade.isVLAType typ ->
+      begin match ValueDomain.CArrays.length arr with
+        | None -> `Top
+        | Some len ->
+          let item = ValueDomain.CArrays.get ~checkBounds:false (Queries.to_value_domain_ask (Analyses.ask_of_man man)) arr (None, ValueDomain.ArrIdxDomain.top ()) in
+          begin match size_of_value_in_bytes man item_typ item with
+            | `Lifted item_size ->
+              let len_casted = ID.cast_to ~kind:Internal (Cilfacade.ptrdiff_ikind ()) len in (* TODO: proper castkind *)
+              begin
+                try `Lifted (GobRef.wrap AnalysisState.executing_speculative_computations true (fun () -> ID.mul item_size len_casted))
+                with IntDomain.ArithmeticOnIntegerBot _ -> `Bot
+              end
+            | (`Top | `Bot) as size -> size
+          end
+      end
+    | _, _ when Cilfacade.isVLAType typ -> `Top
+    | _, _ -> size_of_type_in_bytes typ
 
   let offs_lt_zero offs =
     try ID.lt offs (intdom_of_int 0)
@@ -93,21 +119,22 @@ struct
         Checks.warn Checks.Category.InvalidMemoryAccess "Var %a is potentially accessed out-of-scope. Invalid memory access may occur" CilType.Varinfo.pretty v
       );
       begin match Cil.unrollType v.vtype with
+        | TArray _ when Cilfacade.isVLAType v.vtype ->
+          size_of_value_in_bytes man v.vtype (man.ask (Queries.EvalValue (Lval (Var v, NoOffset))))
         | TArray (item_typ, _, _) ->
-          begin match man.ask (Queries.EvalLength (AddrOf (Var v, NoOffset))) with (* TODO: shouldn't addr offset matter? *)
-            | `Lifted arr_len ->
-              let item_typ_size_in_bytes = size_of_type_in_bytes item_typ in
+          begin match man.ask (Queries.EvalLength (AddrOf (Var v, NoOffset))), size_of_type_in_bytes item_typ with (* TODO: shouldn't addr offset matter? *)
+            | `Lifted arr_len, `Lifted item_typ_size_in_bytes ->
               let arr_len_casted = ID.cast_to ~kind:Internal (Cilfacade.ptrdiff_ikind ()) arr_len in (* TODO: proper castkind *)
               begin
                 try `Lifted (ID.mul item_typ_size_in_bytes arr_len_casted)
                 with IntDomain.ArithmeticOnIntegerBot _ -> `Bot
               end
-            | `Bot -> `Bot
-            | `Top -> `Top
+            | `Bot, _ -> `Bot
+            | `Top, _
+            | _, `Top -> `Top
           end
         | _ ->
-          let type_size_in_bytes = size_of_type_in_bytes v.vtype in
-          `Lifted type_size_in_bytes
+          size_of_type_in_bytes v.vtype
       end
     | _ -> `Top
 

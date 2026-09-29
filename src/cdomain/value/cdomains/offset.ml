@@ -230,8 +230,12 @@ struct
           match Option.map unrollType typ with
           | Some TPtr(item_typ, _) (* for memOutOfBounds *)
           | Some TArray(item_typ, _, _) ->
-            let item_size_in_bytes = Cilfacade.bytesSizeOf item_typ in
-            (Some item_typ, idx_of_int item_size_in_bytes)
+            let item_size_in_bytes =
+              match Cilfacade.bytesSizeOf item_typ with
+              | size -> idx_of_int size
+              | exception Cil.SizeOfError _ -> Idx.top () (* variable-length array *)
+            in
+            (Some item_typ, item_size_in_bytes)
           | _ ->
             (None, Idx.top ())
         in
