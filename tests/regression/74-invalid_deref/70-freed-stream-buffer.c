@@ -7,7 +7,7 @@ int main(void) {
   char *b = malloc(BUFSIZ);
   setvbuf(stdout, b, _IOFBF, BUFSIZ);
   fputs("a\n", stdout); // NOWARN
-  free(b);
+  free(b); // WARN
   fputs("b\n", stdout); // WARN
   return 0;
 }
