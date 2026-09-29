@@ -224,8 +224,9 @@ struct
     | SizeOfStr _
     | AlignOf _
     | AddrOfLabel _ -> ()
-    (* The operand of sizeof is not evaluated unless its type is a variable-length array (C11 6.5.3.4p2). *)
-    | SizeOfE e when not (Cilfacade.isVLAType (Cilfacade.typeOf e)) -> ()
+    (* The operand of sizeof is not evaluated unless its type is a variable-length array (C11 6.5.3.4p2).
+       When the operand's type cannot be computed, it is checked as if evaluated. *)
+    | SizeOfE e when (match Cilfacade.typeOf e with t -> not (Cilfacade.isVLAType t) | exception Cilfacade.TypeOfError _ -> false) -> ()
     (* The operand of GCC's __alignof__ is never evaluated, not even for a variable-length array. *)
     | AlignOfE _ -> ()
     | Real e

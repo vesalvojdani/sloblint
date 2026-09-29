@@ -364,8 +364,9 @@ and distribute_access_exp f = function
     distribute_access_exp f e
 
   (* The operand of sizeof is not evaluated unless its type is a variable-length array (C11 6.5.3.4p2).
-     Such an operand is an array lvalue whose elements are not read (C11 6.3.2.1p2-3): only the accesses that compute its address happen. *)
-  | SizeOfE (Lval lval) when Cilfacade.isVLAType (Cilfacade.typeOfLval lval) ->
+     Such an operand is an array lvalue whose elements are not read (C11 6.3.2.1p2-3): only the accesses that compute its address happen.
+     When the operand's type cannot be computed, it is treated as a variable-length array. *)
+  | SizeOfE (Lval lval) when (match Cilfacade.typeOfLval lval with t -> Cilfacade.isVLAType t | exception Cilfacade.TypeOfError _ -> true) ->
     distribute_access_lval_addr f lval
   | SizeOfE _ ->
     ()
