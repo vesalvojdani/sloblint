@@ -123,6 +123,7 @@ type attr =
                      @see <https://man7.org/linux/man-pages/man7/pthreads.7.html> for list of thread-unsafe functions under POSIX.
                      @see <https://github.com/goblint/analyzer/issues/723> for Goblint issue about the (future) use of this attribute. *)
   | InvalidateGlobals (** Function invalidates all globals when called. *) (* TODO: AccessGlobals of Access.t list? *)
+  | StreamUnlocked (** Function reads or writes a stream without taking the lock on it, as [putc_unlocked] does. *)
   | AllStreamsIfNull (** Function given a null stream as its first argument reads and writes every output stream, as [fflush(NULL)] does. *)
   | UsesStream of StandardStreams.t (** Function reads and writes the standard stream without taking it as an argument, as [printf] does [stdout]: it reads and writes the buffer the stream holds, as a function taking the stream as an argument does. *)
 
