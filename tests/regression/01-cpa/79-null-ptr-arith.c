@@ -1,3 +1,4 @@
+// PARAM: --disable warn.assumption
 int main(void) {
   int *p;
   int i;

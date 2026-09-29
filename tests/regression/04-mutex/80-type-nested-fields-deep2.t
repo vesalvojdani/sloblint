@@ -23,7 +23,10 @@
   [Info][Imprecise] Invalidating expressions: & tmp (80-type-nested-fields-deep2.c:43:3-43:24)
   [Error][Imprecise][Unsound] Function definition missing for getT (80-type-nested-fields-deep2.c:36:3-36:22)
   [Error][Imprecise][Unsound] Function definition missing for getU (80-type-nested-fields-deep2.c:43:3-43:24)
+  [Info][Assumption] Assignment to unknown address, assuming no write happened. (80-type-nested-fields-deep2.c:36:3-36:22)
+  [Info][Assumption] Assignment to unknown address, assuming no write happened. (80-type-nested-fields-deep2.c:43:3-43:24)
   [Error][Imprecise][Unsound] Function definition missing
+  [Info][Assumption] Assignment to unknown address, assuming no write happened.
 
   $ goblint --enable warn.deterministic --enable allglobs --enable dbg.full-output 80-type-nested-fields-deep2.c > full-output.txt 2>&1
 
