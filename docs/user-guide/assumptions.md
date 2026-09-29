@@ -78,7 +78,8 @@ _NB! This list is likely incomplete._
 
     and the stream reads and writes the array until it is closed, at the latest when `exit` flushes and closes all streams (7.22.4.4), which happens after `main`'s local variables have ended when `main` returns (5.1.2.2.3).
 
-    Goblint does not check where the buffer's storage ends, and reports this assumption at each such call whose buffer may be storage other than static storage.
+    For `stdin`, `stdout` and `stderr`, the `base` analysis reports a `UseAfterFree` warning where the buffer's storage ends while the stream holds it: at a function's return or a `longjmp` leaving it, at `free` or `realloc`, and at `pthread_exit`.
+    Where the storage may end elsewhere, Goblint reports this assumption at the call instead: for a buffer handed to any other stream (except static storage), and for an unknown address, `alloca` memory, thread-local storage, a local that may be declared in a nested block (every local, unless `cil.addNestedScopeAttr` is enabled), a variable-length array, and any local in a program that calls `pthread_cancel`.
 
     Goblint tracks the buffer of `stdin`, `stdout` and `stderr` only: later calls on those streams read and write it. A buffer attached to any other stream, such as one `fopen` returned, is not recorded, so later calls on that stream do not change its contents; that is covered only by the message that the call writes through an unknown address, not by this assumption.
 

@@ -47,9 +47,33 @@
     unknown address and says so. Where it does not, a stream object reachable
     from its arguments comes to hold every object the function reaches.
 
-    {b The buffer's lifetime} is not checked. [SetStreamBuffer] reports the
-    assumption {!buffer_lifetime} wherever the buffer may be storage other
-    than static storage.
+    {b The buffer's lifetime.} A stream may use its buffer until it is
+    closed, at the latest in the flush and close when the program exits, so
+    storage a stream still holds as its buffer must not end first. For a
+    standard stream [Base] reports a [UseAfterFree] warning where it does: at
+    the return of a function whose local a stream holds (for [main], before
+    [exit] flushes, C11 5.1.2.2.3), at a [longjmp] that leaves such a
+    function, at [free] or [realloc] of heap memory a stream holds or of a
+    pointer whose target is not known while a stream holds heap memory, at
+    [pthread_exit] in any thread, [main]'s included, while a stream holds a
+    local of any function or thread-local storage, and where a thread other
+    than the main one returns while a stream holds thread-local storage.
+    [pthread_exit] warns for every local, since the frames on the exiting
+    thread's stack are not known, except a local of [main] where that thread
+    is known not to be the main one and [main] has frames only on the main
+    thread's stack ({!main_frame_only_on_main_thread}). [fclose] detaches the
+    buffer.
+
+    Where the end of the storage may not be one of those, [SetStreamBuffer]
+    reports the assumption {!buffer_lifetime} instead: for a stream that may
+    be other than a standard stream any buffer but static storage, heap
+    memory included; and for a standard stream an unknown address, [alloca]
+    memory, thread-local storage (whose thread may be cancelled), a local
+    that may be declared in a nested block (unless [cil.addNestedScopeAttr]
+    shows it is not), a variable-length array, whose lifetime also ends where
+    a [goto] jumps back before its declaration, and any local where the
+    program may call [pthread_cancel] ({!program_may_cancel}), whose thread's
+    frames end without a return or a [pthread_exit].
 
     {b Other streams.} A stream that is not a standard one, such as one
     [fopen] returned, has an unknown address, so [SetStreamBuffer] records
@@ -170,6 +194,52 @@ let assigned s = List.mem_assoc s (ResettableLazy.force assigned_variables)
     stream object [v] holds. *)
 let buffer_exp v = Lval (Var v, NoOffset)
 
+(** Whether a function named in the option [mainfun] may be called other
+    than as the program's entry point: the program names it anywhere but in
+    its own declaration, as a call to it or its address does. Where it may
+    not, its frames exist only on the stack of the main thread, since every
+    other thread starts at a function whose address the program passes. *)
+let main_used_as_function: bool ResettableLazy.t =
+  ResettableLazy.from_fun (fun () ->
+      let mains = GobConfig.get_string_list "mainfun" in
+      let used = ref false in
+      let visitor = object
+        inherit nopCilVisitor
+        method! vvrbl v =
+          if isFunctionType v.vtype && List.mem v.vname mains then used := true;
+          SkipChildren
+      end
+      in
+      visitCilFileSameGlobals visitor !Cilfacade.current_file;
+      !used
+    )
+
+(** Whether the program names [pthread_cancel] anywhere: calls it or takes
+    its address, in a function or in a global's initializer. A thread acts on
+    a cancellation request after [pthread_cancel] returns (at a cancellation
+    point, or at any instruction under asynchronous cancellation), so a buffer
+    attached in between ends with the thread although no stream held it at
+    [pthread_cancel]. *)
+let program_may_cancel: bool ResettableLazy.t =
+  ResettableLazy.from_fun (fun () ->
+      let used = ref false in
+      let visitor = object
+        inherit nopCilVisitor
+        method! vvrbl v =
+          if v.vname = "pthread_cancel" then used := true;
+          SkipChildren
+      end
+      in
+      visitCilFileSameGlobals visitor !Cilfacade.current_file;
+      !used
+    )
+
+(** Whether [fd] is a function named in the option [mainfun] whose frames can
+    be only on the stack of the main thread ({!main_used_as_function}). *)
+let main_frame_only_on_main_thread (fd: fundec) =
+  List.mem fd.svar.vname (GobConfig.get_string_list "mainfun")
+  && not (ResettableLazy.force main_used_as_function)
+
 (** Assumption reported at a [setvbuf], [setbuf] or [setbuffer] whose buffer
     may be storage that ends before the stream is closed. *)
 let buffer_lifetime =
@@ -180,5 +250,7 @@ let buffer_may_end () =
   Assumptions.add "%s" buffer_lifetime
 
 let reset_lazy () =
+  ResettableLazy.reset program_may_cancel;
+  ResettableLazy.reset main_used_as_function;
   ResettableLazy.reset assigned_variables;
   ResettableLazy.reset declared_variables
