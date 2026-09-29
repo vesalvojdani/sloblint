@@ -254,11 +254,11 @@ let posix_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("nl_langinfo", unknown ~attrs:[ThreadUnsafe] [drop "item" []]);
     ("nl_langinfo_l", unknown [drop "item" []; drop "locale" [r_deep]]);
     ("psignal", unknown [drop "sig" []; drop "s" [r]] |> on_stream Stderr);
-    ("getc_unlocked", unknown ~attrs:[ThreadUnsafe] [drop "stream" [r_deep; w_deep]]);
-    ("getchar_unlocked", unknown ~attrs:[ThreadUnsafe] [] |> on_stream Stdin);
+    ("getc_unlocked", unknown ~attrs:[ThreadUnsafe; StreamUnlocked] [drop "stream" [r_deep; w_deep]]);
+    ("getchar_unlocked", unknown ~attrs:[ThreadUnsafe; StreamUnlocked] [] |> on_stream Stdin);
     ("ptsname", unknown ~attrs:[ThreadUnsafe] [drop "fd" []]);
-    ("putc_unlocked", unknown ~attrs:[ThreadUnsafe] [drop "c" []; drop "stream" [r_deep; w_deep]]);
-    ("putchar_unlocked", unknown ~attrs:[ThreadUnsafe] [drop "c" []] |> on_stream Stdout);
+    ("putc_unlocked", unknown ~attrs:[ThreadUnsafe; StreamUnlocked] [drop "c" []; drop "stream" [r_deep; w_deep]]);
+    ("putchar_unlocked", unknown ~attrs:[ThreadUnsafe; StreamUnlocked] [drop "c" []] |> on_stream Stdout);
     ("putenv", unknown ~attrs:[ThreadUnsafe] [drop "string" [r; w]]);
     ("readdir", unknown ~attrs:[ThreadUnsafe] [drop "dirp" [r_deep]]);
     ("setenv", unknown ~attrs:[ThreadUnsafe] [drop "name" [r]; drop "name" [r]; drop "overwrite" []]);
@@ -519,6 +519,10 @@ let pthread_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("pthread_mutex_trylock", special [__ "mutex" []] @@ fun mutex -> Lock {lock = mutex; try_ = true; write = true; return_on_success = false});
     ("__pthread_mutex_trylock", special [__ "mutex" []] @@ fun mutex -> Lock {lock = mutex; try_ = true; write = true; return_on_success = false});
     ("pthread_mutex_unlock", special [__ "mutex" []] @@ fun mutex -> Unlock mutex);
+    (* The lock on a stream is the stream's object for a standard stream ({!StandardStreams}), the one every stdio function without [_unlocked] takes. *)
+    ("flockfile", special [__ "stream" []] @@ fun stream -> Lock {lock = stream; try_ = false; write = true; return_on_success = false});
+    ("ftrylockfile", special [__ "stream" []] @@ fun stream -> Lock {lock = stream; try_ = true; write = true; return_on_success = false});
+    ("funlockfile", special [__ "stream" []] @@ fun stream -> Unlock stream);
     ("__pthread_mutex_unlock", special [__ "mutex" []] @@ fun mutex -> Unlock mutex);
     ("pthread_mutexattr_init", unknown [drop "attr" [w]]);
     ("pthread_mutexattr_getpshared", unknown [drop "attr" [r]; drop "pshared" [w]]);
@@ -670,11 +674,11 @@ let gcc_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
 [@@coverage off]
 
 let glibc_desc_list: (string * LibraryDesc.t) list = LibraryDsl.[
-    ("fputs_unlocked", unknown [drop "s" [r]; drop "stream" [w]]);
-    ("feof_unlocked", unknown [drop "stream" [r_deep; w_deep]]);
-    ("ferror_unlocked", unknown [drop "stream" [r_deep; w_deep]]);
-    ("fwrite_unlocked", unknown [drop "buffer" [r]; drop "size" []; drop "count" []; drop "stream" [r_deep; w_deep]]);
-    ("clearerr_unlocked", unknown [drop "stream" [w]]); (* TODO: why only w? *)
+    ("fputs_unlocked", unknown ~attrs:[StreamUnlocked] [drop "s" [r]; drop "stream" [w]]);
+    ("feof_unlocked", unknown ~attrs:[StreamUnlocked] [drop "stream" [r_deep; w_deep]]);
+    ("ferror_unlocked", unknown ~attrs:[StreamUnlocked] [drop "stream" [r_deep; w_deep]]);
+    ("fwrite_unlocked", unknown ~attrs:[StreamUnlocked] [drop "buffer" [r]; drop "size" []; drop "count" []; drop "stream" [r_deep; w_deep]]);
+    ("clearerr_unlocked", unknown ~attrs:[StreamUnlocked] [drop "stream" [w]]); (* TODO: why only w? *)
     ("__fpending", unknown [drop "stream" [r_deep]]);
     ("futimesat", unknown [drop "dirfd" []; drop "pathname" [r]; drop "times" [r]]);
     ("error", unknown ((drop "status" []) :: (drop "errnum" []) :: (drop "format" [r]) :: (VarArgs (drop' [r]))) |> on_stream Stdout |> on_stream Stderr);
@@ -696,21 +700,21 @@ let glibc_desc_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("__fgets_chk", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
     (* glibc's fortified and aliased stdio entry points, which <bits/stdio2.h> calls in place of the plain ones *)
     ("__fgets_chk_warn", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
-    ("fgets_unlocked", unknown [drop "s" [w]; drop "n" []; drop "stream" [r_deep; w_deep]]);
-    ("__fgets_unlocked_alias", unknown [drop "__s" [w]; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
-    ("__fgets_unlocked_chk", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
-    ("__fgets_unlocked_chk_warn", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("fgets_unlocked", unknown ~attrs:[StreamUnlocked] [drop "s" [w]; drop "n" []; drop "stream" [r_deep; w_deep]]);
+    ("__fgets_unlocked_alias", unknown ~attrs:[StreamUnlocked] [drop "__s" [w]; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("__fgets_unlocked_chk", unknown ~attrs:[StreamUnlocked] [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("__fgets_unlocked_chk_warn", unknown ~attrs:[StreamUnlocked] [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
     ("fgetws", unknown [drop "ws" [w]; drop "n" []; drop "stream" [r_deep; w_deep]]);
     ("__fgetws_alias", unknown [drop "__s" [w]; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
     ("__fgetws_chk", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
     ("__fgetws_chk_warn", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
-    ("fgetws_unlocked", unknown [drop "ws" [w]; drop "n" []; drop "stream" [r_deep; w_deep]]);
-    ("__fgetws_unlocked_alias", unknown [drop "__s" [w]; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
-    ("__fgetws_unlocked_chk", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
-    ("__fgetws_unlocked_chk_warn", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
-    ("fgetc_unlocked", unknown [drop "stream" [r_deep; w_deep]]);
-    ("fputc_unlocked", unknown [drop "c" []; drop "stream" [r_deep; w_deep]]);
-    ("fflush_unlocked", unknown ~attrs:[AllStreamsIfNull] [drop "stream" [r_deep; w_deep]]);
+    ("fgetws_unlocked", unknown ~attrs:[StreamUnlocked] [drop "ws" [w]; drop "n" []; drop "stream" [r_deep; w_deep]]);
+    ("__fgetws_unlocked_alias", unknown ~attrs:[StreamUnlocked] [drop "__s" [w]; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("__fgetws_unlocked_chk", unknown ~attrs:[StreamUnlocked] [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("__fgetws_unlocked_chk_warn", unknown ~attrs:[StreamUnlocked] [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("fgetc_unlocked", unknown ~attrs:[StreamUnlocked] [drop "stream" [r_deep; w_deep]]);
+    ("fputc_unlocked", unknown ~attrs:[StreamUnlocked] [drop "c" []; drop "stream" [r_deep; w_deep]]);
+    ("fflush_unlocked", unknown ~attrs:[StreamUnlocked; AllStreamsIfNull] [drop "stream" [r_deep; w_deep]]);
     ("__vprintf_chk", unknown [drop "flag" []; drop "format" [r]; drop "ap" [r_deep]] |> on_stream Stdout);
     ("__wprintf_chk", unknown (drop "flag" [] :: drop "format" [r] :: VarArgs (drop' [r])) |> on_stream Stdout);
     ("__vwprintf_chk", unknown [drop "flag" []; drop "format" [r]; drop "ap" [r_deep]] |> on_stream Stdout);
@@ -720,15 +724,15 @@ let glibc_desc_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("__fread_alias", unknown [drop "__ptr" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
     ("__fread_chk", unknown [drop "__ptr" [w]; drop "__ptrlen" []; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
     ("__fread_chk_warn", unknown [drop "buffer" [w]; drop "os" []; drop "size" []; drop "count" []; drop "stream" [r_deep; w_deep]]);
-    ("fread_unlocked", unknown ~attrs:[ThreadUnsafe] [drop "buffer" [w]; drop "size" []; drop "count" []; drop "stream" [r_deep; w_deep]]);
-    ("__fread_unlocked_alias", unknown ~attrs:[ThreadUnsafe] [drop "__ptr" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
-    ("__fread_unlocked_chk", unknown ~attrs:[ThreadUnsafe] [drop "__ptr" [w]; drop "__ptrlen" []; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
-    ("__fread_unlocked_chk_warn", unknown ~attrs:[ThreadUnsafe] [drop "__ptr" [w]; drop "__ptrlen" []; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("fread_unlocked", unknown ~attrs:[ThreadUnsafe; StreamUnlocked] [drop "buffer" [w]; drop "size" []; drop "count" []; drop "stream" [r_deep; w_deep]]);
+    ("__fread_unlocked_alias", unknown ~attrs:[ThreadUnsafe; StreamUnlocked] [drop "__ptr" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("__fread_unlocked_chk", unknown ~attrs:[ThreadUnsafe; StreamUnlocked] [drop "__ptr" [w]; drop "__ptrlen" []; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("__fread_unlocked_chk_warn", unknown ~attrs:[ThreadUnsafe; StreamUnlocked] [drop "__ptr" [w]; drop "__ptrlen" []; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
     ("__read_chk", unknown [drop "__fd" []; drop "__buf" [w]; drop "__nbytes" []; drop "__buflen" []]);
     ("__read_alias", unknown [drop "__fd" []; drop "__buf" [w]; drop "__nbytes" []]);
     ("__readlink_chk", unknown [drop "path" [r]; drop "buf" [w]; drop "len" []; drop "buflen" []]);
     ("__readlink_alias", unknown [drop "path" [r]; drop "buf" [w]; drop "len" []]);
-    ("__overflow", unknown [drop "f" [r; w]; drop "ch" []]); (* writes [ch] into the stream's buffer, flushing it when full *)
+    ("__overflow", unknown ~attrs:[StreamUnlocked] [drop "f" [r; w]; drop "ch" []]); (* writes [ch] into the stream's buffer, flushing it when full *)
     ("__ctype_get_mb_cur_max", unknown []);
     ("__maskrune", unknown [drop "c" []; drop "f" []]);
     ("__xmknod", unknown [drop "ver" []; drop "path" [r]; drop "mode" []; drop "dev" [r; w]]);
@@ -745,7 +749,7 @@ let glibc_desc_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("svc_sendreply", unknown [drop "xprt" [r_deep; w_deep]; drop "outproc" [s]; drop "out" [r]]);
     ("shutdown", unknown [drop "socket" []; drop "how" []]);
     ("getaddrinfo_a", unknown [drop "mode" []; drop "list" [w_deep]; drop "nitems" []; drop "sevp" [r; w; s]]);
-    ("__uflow", unknown [drop "file" [r; w]]);
+    ("__uflow", unknown ~attrs:[StreamUnlocked] [drop "file" [r; w]]);
     ("getservbyname_r", unknown [drop "name" [r]; drop "proto" [r]; drop "result_buf" [w_deep]; drop "buf" [w]; drop "buflen" []; drop "result" [w]]);
     ("strsep", unknown [drop "stringp" [r_deep; w]; drop "delim" [r]]);
     ("strcasestr", unknown [drop "haystack" [r]; drop "needle" [r]]);

@@ -35,8 +35,11 @@
     [fflush] given a stream that may be null
     ({!LibraryDesc.attr.AllStreamsIfNull}) to all three. Each access to a
     buffer is reported as an [Access] event of its own
-    ([AccessAnalysis.do_access]), so [useAfterFree] and the race analysis
-    check it. The objects themselves are never data races
+    ([AccessAnalysis.do_access]), so [useAfterFree] checks it, and the race
+    analysis takes it as made under the lock on the stream
+    ([MutexAnalysis.access]), which is the stream's object, as [flockfile]
+    takes it; a function with {!LibraryDesc.attr.StreamUnlocked}, such as
+    [putc_unlocked], takes no lock. The objects themselves are never data races
     ({!Access.is_ignorable_mval}): only [SetStreamBuffer] writes one, and the
     C library serializes the calls on a stream.
 
@@ -167,8 +170,18 @@ let exp s =
 let assigned s = List.mem_assoc s (ResettableLazy.force assigned_variables)
 
 (** The expression of the access a library call makes to the buffer the
-    stream object [v] holds. *)
-let buffer_exp v = Lval (Var v, NoOffset)
+    stream object [v] holds: [Lval] of [v] where the call takes the lock on
+    the stream, as every stdio function does except the [*_unlocked] ones,
+    and [*&v] where it does not. *)
+let buffer_exp ~locked v =
+  if locked then Lval (Var v, NoOffset)
+  else Lval (Mem (AddrOf (Var v, NoOffset)), NoOffset)
+
+(** The stream object [e] names if [e] is the expression of a buffer access
+    made under the stream's lock ({!buffer_exp}). *)
+let locked_buffer = function
+  | Lval (Var v, NoOffset) when is_object v -> Some v
+  | _ -> None
 
 (** Assumption reported at a [setvbuf], [setbuf] or [setbuffer] whose buffer
     may be storage that ends before the stream is closed. *)

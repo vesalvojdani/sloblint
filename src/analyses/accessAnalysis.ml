@@ -41,12 +41,14 @@ struct
      call also reads or writes the bytes of the buffer the object holds
      ({!StandardStreams}), and nothing the buffer's contents point to. That
      access is emitted separately, with {!StandardStreams.buffer_exp} as its
-     expression. The access through [e] itself is emitted without what is
-     reachable from a stream object's value, so it keeps the objects and
-     whatever [e] reaches otherwise. *)
-  let do_access ?(stream=false) (man: (D.t, G.t, C.t, V.t) man) (kind:AccessKind.t) (reach:bool) (e:exp) =
+     expression: [`Locked], as for a stdio function that takes the lock on the
+     stream, makes {!MutexAnalysis} take it as made under that lock;
+     [`Unlocked], as for [putc_unlocked], does not. The access through [e]
+     itself is emitted without what is reachable from a stream object's
+     value, so it keeps the objects and whatever [e] reaches otherwise. *)
+  let do_access ?(stream: [`Locked | `Unlocked] option) (man: (D.t, G.t, C.t, V.t) man) (kind:AccessKind.t) (reach:bool) (e:exp) =
     if M.tracing then M.trace "access" "do_access %a %a %B" d_exp e AccessKind.pretty kind reach;
-    let objects = if not stream then [] else
+    let objects = if Option.is_none stream then [] else
         let mpt = man.ask (MayPointTo e) in
         Queries.AD.fold (fun addr objects ->
             match addr with
@@ -74,7 +76,7 @@ struct
         man.emit (Access {exp=e; ad; kind; reach})
       end;
       List.iter (fun v ->
-          let buffer = StandardStreams.buffer_exp v in
+          let buffer = StandardStreams.buffer_exp ~locked:(stream = Some `Locked) v in
           let ad = man.ask (MayPointTo buffer) in
           if not (Queries.AD.is_null ad || Queries.AD.is_empty ad) then
             man.emit (Access {exp=buffer; ad; kind; reach=false})
@@ -139,7 +141,7 @@ struct
     | Unlock _ ->
       man.local
     | _ ->
-      let stream = true in
+      let stream = if List.mem LibraryDesc.StreamUnlocked desc.attrs then `Unlocked else `Locked in
       LibraryDesc.Accesses.iter desc.accs (fun {kind; deep = reach} exp ->
           access_one_top ~deref:true ~stream man kind reach exp (* access dereferenced using special accesses *)
         ) arglist;
