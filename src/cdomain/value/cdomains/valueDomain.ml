@@ -418,6 +418,12 @@ struct
       | TArray(t, Some exp, args) -> TArray(stripVarLenArr t, None, args)
       | t -> t
     in
+    (* The last step of an offset, as an offset of one step. *)
+    let rec last_step = function
+      | `NoOffset -> `NoOffset
+      | (`Field (_, `NoOffset) | `Index (_, `NoOffset)) as s -> s
+      | `Field (_, o) | `Index (_, o) -> last_step o
+    in
     let rec adjust_offs v o d =
       let ta = try Addr.Offs.type_of ~base:v.vtype o with Offset.Type_of_error (t,s) -> raise (CastError s) in
       let info = GobPretty.sprintf "Ptr-Cast %a from %a to %a" Addr.pretty (Addr.Addr (v,o)) d_type ta d_type t in
@@ -426,8 +432,34 @@ struct
       match Stdlib.compare (bitsSizeOf (stripVarLenArr t)) (bitsSizeOf (stripVarLenArr ta)) with (* TODO is it enough to compare the size? -> yes? *)
       | 0 ->
         if M.tracing then M.tracel "casta" "same size";
-        if not (typ_eq t ta) then err "Cast to different type of same size."
-        else (if M.tracing then M.tracel "casta" "SUCCESS!"; o)
+        if typ_eq t ta then (if M.tracing then M.tracel "casta" "SUCCESS!"; o)
+        else
+          (* Types of the same size that differ: C11 6.7.2.1p15-16 make a
+             pointer to a struct or union, suitably converted, point to its
+             first member, and conversely. [outward] removes a last offset
+             step that is a first field or index 0, for a cast from a member
+             back to its container; [inward] adds one, for a cast from a
+             struct, union or array to its first member or element, as the
+             cast to a smaller type below does. [outward] is tried first; [d]
+             keeps one chain of recursive calls from changing direction. *)
+          let outward () =
+            if d = Some false then err "Ptr-cast outward after a cast inward.";
+            if o = `NoOffset || Addr.Offs.cmp_zero_offset (last_step o) <> `MustZero then
+              err "Ptr-cast to outer type of same size, but no first-member step to remove.";
+            adjust_offs v (Addr.Offs.remove_offset o) (Some true)
+          in
+          let inward () =
+            if d = Some true then err "Ptr-cast inward after a cast outward.";
+            match Cil.unrollType ta with
+            | TComp ({cfields = fi::_; _}, _) ->
+              if M.tracing then M.tracel "casta" "same-size cast struct to its first field";
+              adjust_offs v (Addr.Offs.add_offset o (`Field (fi, `NoOffset))) (Some false)
+            | TArray _ ->
+              if M.tracing then M.tracel "casta" "same-size cast array to its first element";
+              adjust_offs v (Addr.Offs.add_offset o (`Index (IndexDomain.of_int (Cilfacade.ptrdiff_ikind ()) Z.zero, `NoOffset))) (Some false)
+            | _ -> err "Cast to different type of same size."
+          in
+          (try outward () with CastError _ -> inward ())
       | c when c > 0 -> (* cast to bigger/outer type *)
         if M.tracing then M.tracel "casta" "cast to bigger size";
         if d = Some false then err "Ptr-cast to type of incompatible size!" else
