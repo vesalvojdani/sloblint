@@ -70,4 +70,16 @@ _NB! This list is likely incomplete._
     See [issue #1702](https://github.com/goblint/analyzer/issues/1702).
 
 
+5.  A buffer attached to a stream with `setvbuf`, `setbuf` or `setbuffer` stays live until the stream is closed or the program exits.
+
+    [C11's N1570][n1570] at 7.21.5.6 states that
+
+    > The contents of the array at any time are indeterminate.
+
+    and the stream reads and writes the array until it is closed, at the latest when `exit` flushes and closes all streams (7.22.4.4), which happens after `main`'s local variables have ended when `main` returns (5.1.2.2.3).
+
+    Goblint does not check where the buffer's storage ends, and reports this assumption at each such call whose buffer may be storage other than static storage.
+
+    Goblint tracks the buffer of `stdin`, `stdout` and `stderr` only: later calls on those streams read and write it. A buffer attached to any other stream, such as one `fopen` returned, is not recorded, so later calls on that stream do not change its contents; that is covered only by the message that the call writes through an unknown address, not by this assumption.
+
 [n1570]: https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf
