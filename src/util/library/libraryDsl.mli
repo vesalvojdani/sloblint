@@ -80,6 +80,13 @@ val c: access
 (** Deep {!AccessKind.Spawn} access, substituting deep function pointer calls for now (TODO)  *)
 val c_deep: access
 
+(** Shallow {!AccessKind.Keep} access: the function may keep a pointer to what the argument points to after it returns.
+    Only a function with the {!LibraryDesc.KeepsSpecified} attribute is taken to keep no other argument. *)
+val k: access
+
+(** Deep {!AccessKind.Keep} access: the function may keep a pointer into anything reachable from the argument after it returns. *)
+val k_deep: access
+
 (** Conditional access, e.g. on an option. *)
 val if_: (unit -> bool) -> access -> access
 
