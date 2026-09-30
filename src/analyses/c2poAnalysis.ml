@@ -228,8 +228,40 @@ struct
           ctx.local
         else
           branch ctx exp true
-      | _ ->
+      | Malloc _ | Calloc _ | Alloca _ ->
         `Lifted t
+      | _ ->
+        (* Remove the terms that may point into memory the function writes
+           through its arguments, collected from [desc.accs] as in
+           [RelationAnalysis.special_unknown_invalidate]. Only known addresses
+           are invalidated: as in base and the relational analyses, a write
+           through an unknown pointer is not reflected here, and base reports
+           the unknown address as escaped. *)
+        let shallow = LibraryDesc.Accesses.find desc.accs { kind = Write; deep = false } exprs in
+        let deep = LibraryDesc.Accesses.find desc.accs { kind = Write; deep = true } exprs in
+        let deep =
+          if List.mem LibraryDesc.InvalidateGlobals desc.attrs then
+            foldGlobals !Cilfacade.current_file (fun acc global ->
+                match global with
+                | GVar (vi, _, _) when not (BaseUtil.is_static vi) ->
+                  mkAddrOf (Var vi, NoOffset) :: acc
+                | _ -> acc
+              ) deep
+          else
+            deep
+        in
+        let known_addresses ad =
+          if MayBeEqual.AD.is_top ad then
+            MayBeEqual.AD.empty ()
+          else
+            MayBeEqual.AD.filter (function Addr _ -> true | _ -> false) ad
+        in
+        let written = List.fold (fun acc e -> MayBeEqual.AD.join acc (known_addresses (ask.f (MayPointTo e)))) (MayBeEqual.AD.empty ()) shallow in
+        let written = List.fold (fun acc e -> MayBeEqual.AD.join acc (known_addresses (ask.f (ReachableFrom e)))) written deep in
+        if MayBeEqual.AD.is_empty written then
+          `Lifted t
+        else
+          `Lifted (data_to_t (D.remove_tainted_terms ask written t.data))
 
   (** First all local variables of the function are duplicated,
       then we remember the value of each local variable at the beginning of the function by using the analysis startState.
