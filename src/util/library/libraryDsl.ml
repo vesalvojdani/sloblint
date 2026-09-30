@@ -124,5 +124,7 @@ let s = Access { kind = Spawn; deep = false; }
 let s_deep = Access { kind = Spawn; deep = true; }
 let c = Access { kind = Spawn; deep = false; } (* TODO: Sound, but very imprecise hack for calls to function pointers given as arguments. *)
 let c_deep = Access { kind = Spawn; deep = true; }
+let k = Access { kind = Keep; deep = false; }
+let k_deep = Access { kind = Keep; deep = true; }
 
 let if_ p access = If (p, access)

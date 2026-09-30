@@ -41,6 +41,18 @@ struct
       if M.tracing then M.tracel "escape" "reachable %a: %a" d_exp e Queries.AD.pretty ad;
       D.empty ()
 
+  (** What is reachable from the value of [e], as {!reachable}, except that a
+      struct or union lvalue is followed member by member: {!Queries.ReachableFrom}
+      of a compound value is empty. *)
+  let rec reachable_value (ask: Queries.ask) e: D.t =
+    match e, Cil.unrollType (Cilfacade.typeOf e) with
+    | Lval lval, TComp (comp, _) ->
+      List.fold_left (fun acc field ->
+          D.join acc (reachable_value ask (Lval (Cil.addOffsetLval (Field (field, NoOffset)) lval)))
+        ) (D.empty ()) comp.cfields
+    | Lval lval, TArray _ -> reachable ask (StartOf lval)
+    | _ -> reachable ask e
+
   let mpt (ask: Queries.ask) e: D.t =
     match ask.f (Queries.MayPointTo e) with
     | ad when not (AD.is_top ad) ->
@@ -122,8 +134,8 @@ struct
       end
     | _ -> Queries.Result.top q
 
-  let escape_rval man ask (rval:exp) =
-    let escaped = reachable ask rval in
+  (** Records the non-global variables of [escaped] as escaped. *)
+  let escape_vars man ask (escaped: D.t) =
     let escaped = D.filter (fun v -> not v.vglob) escaped in
 
     let thread_id = thread_id man in
@@ -131,6 +143,8 @@ struct
     if ThreadFlag.has_ever_been_multi ask then (* avoid emitting unnecessary event *)
       emit_escape_event man escaped;
     escaped
+
+  let escape_rval man ask (rval:exp) = escape_vars man ask (reachable ask rval)
 
   (* transfer functions *)
   let assign man (lval:lval) (rval:exp) : D.t =
@@ -152,16 +166,17 @@ struct
       D.join man.local escaped
     | _ -> man.local
 
+  (** A library function escapes what is reachable from every argument it may
+      keep a pointer derived from after it returns ({!LibraryDesc.kept}), as
+      [pthread_setspecific] keeps its [value] and [__goblint_globalize] its
+      [ptr]: another thread may obtain the pointer from the library. *)
   let special man (lval: lval option) (f:varinfo) (args:exp list) : D.t =
     let desc = LibraryFunctions.find f in
-    match desc.special args, f.vname, args with
-    | Globalize ptr, _, _ ->
-      let escaped = escape_rval man (Analyses.ask_of_man man) ptr in
-      D.join man.local escaped
-    | _, "pthread_setspecific" , [key; pt_value] ->
-      let escaped = escape_rval man (Analyses.ask_of_man man) pt_value in
-      D.join man.local escaped
-    | _ -> man.local
+    let ask = Analyses.ask_of_man man in
+    let kept_shallow, kept_deep = LibraryDesc.kept desc args in
+    List.fold_left (fun escaped arg ->
+        D.join escaped (escape_vars man ask (reachable_value ask arg))
+      ) man.local (kept_shallow @ kept_deep)
 
   let startstate v = D.bot ()
   let exitstate  v = D.bot ()
