@@ -93,6 +93,35 @@ struct
     HeapVars.iter side_effect_globals_to_heap_var freed_heap_vars
 
 
+  (** [reachable_from_current_function man v] is [false] only if no global,
+      formal or local of the current function reaches an address in [v],
+      directly or through other memory, according to [Queries.ReachableFrom].
+      A caller's locals that are not reachable this way cannot be accessed
+      until the call returns, and [combine_env] then joins the caller's freed
+      set back in.
+      An unknown pointer in the result is not counted. This relies on [event]
+      not checking an access whose address set may be unknown
+      ([Queries.AD.is_top]): a check of such accesses against the freed set
+      must not depend on [v] being in it. *)
+  let reachable_from_current_function man (v: varinfo) =
+    let reaches root =
+      (* [should_warn] is off because [Queries.ReachableFrom] reports each unknown pointer it meets as an unsoundness *)
+      let ad = GobRef.wrap AnalysisState.should_warn false (fun () -> man.ask (Queries.ReachableFrom (AddrOf (Var root, NoOffset)))) in
+      Queries.AD.exists (function
+          | Queries.AD.Addr.Addr (v', _) -> CilType.Varinfo.equal v v'
+          | _ -> false
+        ) ad
+    in
+    let fd = Node.find_fundec man.node in
+    List.exists reaches fd.sformals ||
+    List.exists reaches fd.slocals ||
+    foldGlobals !Cilfacade.current_file (fun acc global ->
+        acc || match global with
+        | GVar (g, _, _) -> reaches g
+        | GVarDecl (g, _) when not (isFunctionType g.vtype) -> reaches g
+        | _ -> false
+      ) false
+
   (* TRANSFER FUNCTIONS *)
 
   let enter man (lval:lval option) (f:fundec) (args:exp list) : (D.t * D.t) list =
@@ -130,6 +159,16 @@ struct
           side_effect_mem_free man pointed_to_heap_vars (get_current_threadid man) (get_joined_threads man);
           (* Add all heap vars, which ptr points to, to the state *)
           (fst state, HeapVars.join (snd state) pointed_to_heap_vars)
+        | _ -> state
+      end
+    | Malloc _
+    | Calloc _ ->
+      begin match man.ask (Queries.AllocVar Heap) with
+        | `Lifted v when HeapVars.mem v (snd state)
+                        && not (ThreadFlag.has_ever_been_multi (Analyses.ask_of_man man))
+                        && not (reachable_from_current_function man v) ->
+          (* Only the block just allocated can be accessed through [v] in the current function *)
+          (fst state, HeapVars.remove v (snd state))
         | _ -> state
       end
     | Alloca _ ->
