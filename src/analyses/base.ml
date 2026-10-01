@@ -1848,6 +1848,12 @@ struct
     let update_one x store =
       set_addr ~man ?invariant ?blob_destructive ?lval_raw ?rval_raw ?t_override store x lval_type value
     in try
+      (* [set_addr] writes nothing to [UnknownPtr], although it may stand for
+         a variable this state tracks, so declare the dropped write. A
+         refinement ([invariant]) is not a write of the program and declares
+         nothing. *)
+      if not (Option.default false invariant) && AD.mem Addr.UnknownPtr lval then
+        Assumptions.add "Assignment to unknown address, assuming no write happened.";
       (* We start from the current state and an empty list of global deltas,
        * and we assign to all the different possible places: *)
       let nst = AD.fold update_one lval st in
