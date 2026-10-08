@@ -784,6 +784,10 @@ struct
     done;
     !collected
 
+  (** Declare that a read relies on memory allocated with [malloc] being written before it is read: assumption 3 in docs/user-guide/assumptions.md. *)
+  let assume_malloc_initialized () =
+    Assumptions.add "Memory allocated with malloc is initialized before reading"
+
   (* The evaluation function as mutually recursive eval_lv & eval_rv *)
   let rec eval_rv ~(man: _ man) (st: store) (exp:exp): value =
     if M.tracing then M.traceli "evalint" "base eval_rv %a" d_exp exp;
@@ -1001,9 +1005,22 @@ struct
     if M.tracing then M.traceu "evalint" "base eval_rv_base %a -> %a" d_exp exp VD.pretty r;
     r
 
+  (** Evaluate the lvalue [lv], read by the expression [exp].
+      [malloc] does not initialize the memory it allocates, and Base holds bottom for any part of it the program has not written.
+      When a value read through one address is joined with bottom read from such memory through another, the bottom disappears from the result.
+      The read then relies on that memory being written before it is read, and declares this assumption.
+      A result that is [Bot] as a whole declares nothing here: the [eval_rv] wrapper defined after [eval_rv_keep_bot], which callers outside this recursion use, turns it into the top value, and [eval_lv] declares the assumption when it dereferences it. *)
   and eval_rv_base_lval ~eval_lv ~man (st: store) (exp: exp) (lv: lval): value =
+    let v, reads_unwritten = eval_rv_base_lval_unwritten ~eval_lv ~man st exp lv in
+    if reads_unwritten && not (VD.is_bot v) then
+      assume_malloc_initialized ();
+    v
+
+  (** Like [eval_rv_base_lval], without declaring anything.
+      Also returns whether some address of [lv] points into memory allocated by [malloc] whose value there is bottom, because the program has not written it. *)
+  and eval_rv_base_lval_unwritten ~eval_lv ~man (st: store) (exp: exp) (lv: lval): value * bool =
     match lv with
-    | (Var v, ofs) -> get ~man st (eval_lv ~man st (Var v, ofs)) (Some exp)
+    | (Var v, ofs) -> get ~man st (eval_lv ~man st (Var v, ofs)) (Some exp), false
     (* | Lval (Mem e, ofs) -> get ~man st (eval_lv ~man (Mem e, ofs)) *)
     | (Mem e, ofs) ->
       (*if M.tracing then M.tracel "cast" "Deref: lval: %a" d_plainlval lv;*)
@@ -1055,7 +1072,19 @@ struct
         let v' = VD.eval_offset (Queries.to_value_domain_ask (Analyses.ask_of_man man)) v' (convert_offset ~man st ofs) (Some exp) None t in (* handle offset *)
         v'
       in
-      AD.fold (fun a acc -> VD.join acc (lookup_with_offs a)) p (VD.bot ())
+      let reads_unwritten_malloc addr v =
+        match addr with
+        | Addr.Addr (x, _) when VD.is_bot_value v ->
+          begin match get_var ~man st x with
+            | Blob (_, _, zeroinit) -> ZeroInit.may_malloc zeroinit
+            | _ -> false
+          end
+        | _ -> false
+      in
+      AD.fold (fun a (acc, reads_unwritten) ->
+          let v = lookup_with_offs a in
+          (VD.join acc v, reads_unwritten || reads_unwritten_malloc a v)
+        ) p (VD.bot (), false)
 
   and evalbinop ~man (st: store) (op: binop) ~(e1:exp) ?(t1:typ option) ~(e2:exp) ?(t2:typ option) (t:typ): value =
     evalbinop_mustbeequal ~man st op ~e1 ?t1 ~e2 ?t2 t
@@ -1170,7 +1199,19 @@ struct
             )
           );
           AD.map (add_offset_varinfo (convert_offset ~man st ofs)) adr
-        | _ ->
+        | v ->
+          (* Dereferencing bottom read from memory that [malloc] allocated and the program has not written, possibly moved by pointer arithmetic. *)
+          let rec read_lval e =
+            match Cil.stripCasts e with
+            | Lval lv as e -> Some (e, lv)
+            | BinOp ((PlusPI | IndexPI | MinusPI), e, _, _) -> read_lval e
+            | _ -> None
+          in
+          begin match read_lval n with
+            | Some (e, lv) when VD.is_bot v && snd (eval_rv_base_lval_unwritten ~eval_lv ~man st e lv) ->
+              assume_malloc_initialized ()
+            | _ -> ()
+          end;
           M.debug ~category:Analyzer "Failed evaluating %a to lvalue" d_lval lval;
           AD.unknown_ptr
       end

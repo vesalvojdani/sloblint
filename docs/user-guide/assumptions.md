@@ -46,6 +46,9 @@ _NB! This list is likely incomplete._
     after a long list of undefined behaviors.
 
     Goblint does not report reading from uninitialized memory allocated by `malloc`.
+    The `base` analysis holds no value for such memory until the program writes it.
+    Where a read joins this missing value with a value read through another pointer, or dereferences it, Goblint declares the assumption at the read as "Memory allocated with malloc is initialized before reading".
+    The assumption is not declared once the missing value has been joined with a written one before the read: when one element of an allocated array has been written, when the same field of another block from the same allocation site has been written, when the field has been written on another path, or when a whole struct is read through a pointer that may point to several blocks and the field is unwritten in only some of them.
 
     This affects the `base` analysis.
 
