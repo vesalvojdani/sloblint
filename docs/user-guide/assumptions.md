@@ -72,5 +72,25 @@ _NB! This list is likely incomplete._
 
     See [issue #1702](https://github.com/goblint/analyzer/issues/1702).
 
+5.  Elements of local arrays are initialized before reading.
+
+    [C11's N1570][n1570] at J.2 states that
+
+    > The behavior is undefined in the following circumstances:
+    >
+    > - [...]
+    > - The value of an object with automatic storage duration is used while it is indeterminate (6.2.4, 6.7.9, 6.8).
+
+    after a long list of undefined behaviors.
+
+    Goblint does not report reading an element of a local array that the program has not written.
+    With the trivial array domain (the default `ana.base.arrays.domain`), the `base` analysis holds no value for the elements of a local array until the program writes one, and after that it no longer records which elements were written.
+    Goblint declares the assumption at every read of an element of such an array as "Elements of local arrays are initialized before reading", except where the value read is missing and becomes an unknown value.
+    Since the domain does not record which elements were written, this includes reads of arrays that the program has written completely, for example through an initializer.
+    The assumption is not declared when the elements are read from a copy of the array in a global variable or in allocated memory.
+    Arrays using the partitioned or unrolled array domain start with unknown elements and do not rely on this assumption.
+
+    This affects the `base` analysis.
+
 
 [n1570]: https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf

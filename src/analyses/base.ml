@@ -788,6 +788,34 @@ struct
   let assume_malloc_initialized () =
     Assumptions.add "Memory allocated with malloc is initialized before reading"
 
+  (** Declare that a read relies on the elements of a local array being written before they are read: assumption 5 in docs/user-guide/assumptions.md. *)
+  let assume_local_array_initialized () =
+    Assumptions.add "Elements of local arrays are initialized before reading"
+
+  (** [indexes_trivial_array ~varAttr t offs] holds if [offs], an offset into a value of type [t], indexes an array that uses the trivial array domain.
+      [varAttr] are the attributes of the variable or field of type [t].
+      [ValueDomain.init_value] starts the elements of such an array of a local variable as bottom, and once one element is written, the trivial domain no longer records which elements were written. *)
+  let rec indexes_trivial_array ~varAttr (t: typ) (offs: Offs.t) =
+    match Cil.unrollType t, offs with
+    | TArray (ai, _, _), `Index (_, offs) ->
+      not (ArrayDomain.can_recover_from_top (ArrayDomain.get_domain ~varAttr ~typAttr:(Cil.typeAttrs ai)))
+      || indexes_trivial_array ~varAttr:[] ai offs
+    | TComp ({cstruct = true; _}, _), `Field (f, offs) ->
+      indexes_trivial_array ~varAttr:f.fattr f.ftype offs
+    | _, _ -> false
+
+  (** What a read may find unwritten: memory allocated by [malloc] that holds bottom, or an element of a local array that uses the trivial array domain. *)
+  type unwritten = { malloc: bool; local_array: bool }
+
+  let no_unwritten = { malloc = false; local_array = false }
+
+  let join_unwritten u1 u2 = { malloc = u1.malloc || u2.malloc; local_array = u1.local_array || u2.local_array }
+
+  (** Declare the assumptions that a read relies on when it may find the memory in [u] unwritten. *)
+  let assume_initialized u =
+    if u.malloc then assume_malloc_initialized ();
+    if u.local_array then assume_local_array_initialized ()
+
   (* The evaluation function as mutually recursive eval_lv & eval_rv *)
   let rec eval_rv ~(man: _ man) (st: store) (exp:exp): value =
     if M.tracing then M.traceli "evalint" "base eval_rv %a" d_exp exp;
@@ -1009,18 +1037,28 @@ struct
       [malloc] does not initialize the memory it allocates, and Base holds bottom for any part of it the program has not written.
       When a value read through one address is joined with bottom read from such memory through another, the bottom disappears from the result.
       The read then relies on that memory being written before it is read, and declares this assumption.
+      The elements of a local array that uses the trivial array domain also start as bottom, and the bottom disappears with the first write to any element; so every read of such an element declares that the elements are written before they are read, unless its result is [Bot].
       A result that is [Bot] as a whole declares nothing here: the [eval_rv] wrapper defined after [eval_rv_keep_bot], which callers outside this recursion use, turns it into the top value, and [eval_lv] declares the assumption when it dereferences it. *)
   and eval_rv_base_lval ~eval_lv ~man (st: store) (exp: exp) (lv: lval): value =
-    let v, reads_unwritten = eval_rv_base_lval_unwritten ~eval_lv ~man st exp lv in
-    if reads_unwritten && not (VD.is_bot v) then
-      assume_malloc_initialized ();
+    let v, unwritten = eval_rv_base_lval_unwritten ~eval_lv ~man st exp lv in
+    if not (VD.is_bot v) then
+      assume_initialized unwritten;
     v
 
   (** Like [eval_rv_base_lval], without declaring anything.
-      Also returns whether some address of [lv] points into memory allocated by [malloc] whose value there is bottom, because the program has not written it. *)
-  and eval_rv_base_lval_unwritten ~eval_lv ~man (st: store) (exp: exp) (lv: lval): value * bool =
+      Also returns which unwritten memory the read may find: whether some address of [lv] points into memory allocated by [malloc] whose value there is bottom, because the program has not written it, and whether some address of [lv] is an element of a local array that uses the trivial array domain. *)
+  and eval_rv_base_lval_unwritten ~eval_lv ~man (st: store) (exp: exp) (lv: lval): value * unwritten =
+    (* Variables for memory allocated by [malloc] and [alloca] are global ([RichVarinfo]). *)
+    let local_array_element x o = not x.vglob && indexes_trivial_array ~varAttr:x.vattr x.vtype (Lazy.force o) in
     match lv with
-    | (Var v, ofs) -> get ~man st (eval_lv ~man st (Var v, ofs)) (Some exp), false
+    | (Var v, ofs) ->
+      let addrs = eval_lv ~man st (Var v, ofs) in
+      let local_array = AD.exists (function
+          | Addr.Addr (x, o) -> local_array_element x (lazy o)
+          | _ -> false
+        ) addrs
+      in
+      get ~man st addrs (Some exp), { no_unwritten with local_array }
     (* | Lval (Mem e, ofs) -> get ~man st (eval_lv ~man (Mem e, ofs)) *)
     | (Mem e, ofs) ->
       (*if M.tracing then M.tracel "cast" "Deref: lval: %a" d_plainlval lv;*)
@@ -1081,10 +1119,16 @@ struct
           end
         | _ -> false
       in
-      AD.fold (fun a (acc, reads_unwritten) ->
+      let ofs' = lazy (convert_offset ~man st ofs) in
+      let reads_local_array addr =
+        match addr with
+        | Addr.Addr (x, o) -> local_array_element x (lazy (Offs.add_offset o (Lazy.force ofs')))
+        | _ -> false
+      in
+      AD.fold (fun a (acc, unwritten) ->
           let v = lookup_with_offs a in
-          (VD.join acc v, reads_unwritten || reads_unwritten_malloc a v)
-        ) p (VD.bot (), false)
+          (VD.join acc v, join_unwritten unwritten { malloc = reads_unwritten_malloc a v; local_array = reads_local_array a })
+        ) p (VD.bot (), no_unwritten)
 
   and evalbinop ~man (st: store) (op: binop) ~(e1:exp) ?(t1:typ option) ~(e2:exp) ?(t2:typ option) (t:typ): value =
     evalbinop_mustbeequal ~man st op ~e1 ?t1 ~e2 ?t2 t
@@ -1200,7 +1244,7 @@ struct
           );
           AD.map (add_offset_varinfo (convert_offset ~man st ofs)) adr
         | v ->
-          (* Dereferencing bottom read from memory that [malloc] allocated and the program has not written, possibly moved by pointer arithmetic. *)
+          (* Dereferencing bottom read from memory that the program has not written, possibly moved by pointer arithmetic. *)
           let rec read_lval e =
             match Cil.stripCasts e with
             | Lval lv as e -> Some (e, lv)
@@ -1208,8 +1252,8 @@ struct
             | _ -> None
           in
           begin match read_lval n with
-            | Some (e, lv) when VD.is_bot v && snd (eval_rv_base_lval_unwritten ~eval_lv ~man st e lv) ->
-              assume_malloc_initialized ()
+            | Some (e, lv) when VD.is_bot v ->
+              assume_initialized (snd (eval_rv_base_lval_unwritten ~eval_lv ~man st e lv))
             | _ -> ()
           end;
           M.debug ~category:Analyzer "Failed evaluating %a to lvalue" d_lval lval;
