@@ -13,3 +13,5 @@
     live: 9
     dead: 0
     total lines: 9
+  [Info][Assumption] Elements of local arrays are initialized before reading (02-threadid_history_nonunique.c:19:5-19:30)
+  [Info][Assumption] Elements of local arrays are initialized before reading

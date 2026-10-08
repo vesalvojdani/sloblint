@@ -1,4 +1,5 @@
-// PARAM: --enable ana.int.interval
+// PARAM: --enable ana.int.interval --disable warn.assumption
+// Disabled assumptions for NOWARN (no poison warning) below: reading keyword[0] declares that elements of local arrays are initialized before reading
 #include <stdio.h>
 #include <stdlib.h>
 #include <setjmp.h>
