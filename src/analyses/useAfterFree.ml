@@ -162,9 +162,12 @@ struct
           | Free, true ->
             (* The heap vars the argument points to are not recorded: the functions with a deep [Free] access either free
                memory of the library, which has no heap var, or the contents of the object the argument points to
-               ([getline] the buffer in [*lineptr], [xdr_free] the members of [*objp]), not the object itself. A heap var
-               that is both pointed to and reachable from itself is therefore not recorded. *)
+               ([getline] the buffer in [*lineptr], [xdr_free] the members of [*objp]), not the object itself.
+               If such a heap var may stand for several blocks, the freed contents may be a block of the same heap var
+               (an allocation wrapper, or a loop), which is then not recorded either, and the call declares that. *)
             let pointed_to = heap_vars_of man (man.ask (Queries.MayPointTo exp)) in
+            if HeapVars.exists (fun v -> man.ask (Queries.IsMultiple v)) pointed_to then
+              Assumptions.add "%s is assumed not to free a block allocated at the same site as the object its argument points to (useAfterFree)" f.vname;
             free_addresses man state f ~except:pointed_to (man.ask (Queries.ReachableFrom exp))
           | _ -> state
         ) arglist state
