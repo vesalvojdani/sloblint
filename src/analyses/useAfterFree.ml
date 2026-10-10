@@ -163,11 +163,14 @@ struct
             (* The heap vars the argument points to are not recorded: the functions with a deep [Free] access either free
                memory of the library, which has no heap var, or the contents of the object the argument points to
                ([getline] the buffer in [*lineptr], [xdr_free] the members of [*objp]), not the object itself.
-               If such a heap var may stand for several blocks, the freed contents may be a block of the same heap var
-               (an allocation wrapper, or a loop), which is then not recorded either, and the call declares that. *)
+               The freed contents can be a block of an excluded heap var if that heap var may stand for several blocks
+               ([Queries.IsMultiple]: every heap var at the default [ana.malloc.unique_address_count], and otherwise one
+               allocated in a loop, by an allocation wrapper called twice, or in a thread that is not unique), or if the
+               argument may point to several heap vars, one of which holds a pointer to the block another one stands for.
+               Neither case is recorded, and the call declares that. *)
             let pointed_to = heap_vars_of man (man.ask (Queries.MayPointTo exp)) in
-            if HeapVars.exists (fun v -> man.ask (Queries.IsMultiple v)) pointed_to then
-              Assumptions.add "%s is assumed not to free a block allocated at the same site as the object its argument points to (useAfterFree)" f.vname;
+            if HeapVars.cardinal pointed_to > 1 || HeapVars.exists (fun v -> man.ask (Queries.IsMultiple v)) pointed_to then
+              Assumptions.add "%s is assumed not to free a block allocated by the same malloc, calloc or realloc call as an object that %a may point to (the call inside an allocation wrapper, unless the wrapper is in ana.malloc.wrappers) (useAfterFree)" f.vname d_exp exp;
             free_addresses man state f ~except:pointed_to (man.ask (Queries.ReachableFrom exp))
           | _ -> state
         ) arglist state
