@@ -255,6 +255,8 @@ module Base =
       let stable = data.stable in
 
       let narrow_reuse = GobConfig.get_bool "solvers.td3.narrow-reuse" in
+      (* Widening points that are not narrowed any more because their right-hand side exceeded their value in the narrowing phase, see [solve]. *)
+      let narrow_stopped = HM.create 10 in
       let remove_wpoint = GobConfig.get_bool "solvers.td3.remove-wpoint" in
       let weak_deps_handling = GobConfig.get_string "solvers.td3.weak-deps" in
 
@@ -386,9 +388,17 @@ module Base =
             else if term then
               match phase with
               | Widen -> S.Dom.widen old eqd
-              | Narrow when GobConfig.get_bool "exp.no-narrow" -> old (* no narrow *)
+              | Narrow when not (S.Dom.leq eqd old) ->
+                (* In the narrowing phase, the right-hand side of a monotone system does not exceed the value of x.
+                   When it does, the system is not monotone, e.g. with PathSensitive2, whose path representative of a transfer result can depend on the joined state of a path.
+                   Narrowing [old] by such [eqd] stores a value that is not above [eqd], i.e. not a post-solution, which verification reports as "Fixpoint not reached".
+                   Instead, widen, and do not narrow x again for the rest of this solver run, so that x cannot alternate between growing and narrowing.
+                   See https://github.com/goblint/analyzer/pull/490#discussion_r875554284. *)
+                if tracing then trace "sol2" "solve stopping narrowing of %a" S.Var.pretty_trace x;
+                HM.replace narrow_stopped x ();
+                S.Dom.widen old eqd
+              | Narrow when GobConfig.get_bool "exp.no-narrow" || HM.mem narrow_stopped x -> old (* no narrow *)
               | Narrow ->
-                (* assert S.Dom.(leq eqd old || not (leq old eqd)); (* https://github.com/goblint/analyzer/pull/490#discussion_r875554284 *) *)
                 S.Dom.narrow old eqd
             else
               box old eqd
