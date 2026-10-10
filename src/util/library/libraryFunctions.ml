@@ -267,7 +267,7 @@ let posix_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("getopt_long", unknown  ~attrs:[ThreadUnsafe] [drop "argc" []; drop "argv" [r_deep]; drop "optstring" [r_deep]; drop "longopts" [r]; drop "longindex" [w]]);
     ("iconv_open", unknown [drop "tocode" [r]; drop "fromcode" [r]]);
     ("iconv", unknown [drop "cd" [r]; drop "inbuf" [r]; drop "inbytesleft" [r;w]; drop "outbuf" [w]; drop "outbytesleft" [r;w]]);
-    ("iconv_close", unknown [drop "cd" [f]]);
+    ("iconv_close", unknown [drop "cd" [f_deep]]);
     ("strnlen", unknown [drop "s" [r]; drop "maxlen" []]);
     ("chmod", unknown [drop "pathname" [r]; drop "mode" []]);
     ("fchmod", unknown [drop "fd" []; drop "mode" []]);
@@ -321,7 +321,7 @@ let posix_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("fstat", unknown [drop "fd" []; drop "buf" [w]]);
     ("fstatat", unknown [drop "dirfd" []; drop "pathname" [r]; drop "buf" [w]; drop "flags" []]);
     ("chdir", unknown [drop "path" [r]]);
-    ("closedir", unknown [drop "dirp" [r]]);
+    ("closedir", unknown [drop "dirp" [r; f_deep]]);
     ("mkdir", unknown [drop "pathname" [r]; drop "mode" []]);
     ("opendir", unknown [drop "name" [r]]);
     ("rmdir", unknown [drop "path" [r]]);
@@ -351,7 +351,7 @@ let posix_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("basename", unknown ~attrs:[ThreadUnsafe] [drop "path" [r]]);
     ("setpgid", unknown [drop "pid" []; drop "pgid" []]);
     ("dup2", unknown [drop "oldfd" []; drop "newfd" []]);
-    ("pclose", unknown [drop "stream" [w; f]]);
+    ("pclose", unknown [drop "stream" [w; f_deep]]);
     ("getcwd", unknown [drop "buf" [w]; drop "size" []]);
     ("inet_pton", unknown [drop "af" []; drop "src" [r]; drop "dst" [w]]);
     ("__inet_pton_alias", unknown [drop "af" []; drop "src" [r]; drop "dst" [w]]);
@@ -380,7 +380,7 @@ let posix_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("mkstemp", unknown [drop "template" [r; w]]);
     ("regcomp", unknown [drop "preg" [w_deep]; drop "regex" [r]; drop "cflags" []]);
     ("regexec", unknown [drop "preg" [r_deep]; drop "string" [r]; drop "nmatch" []; drop "pmatch" [w_deep]; drop "eflags" []]);
-    ("regfree", unknown [drop "preg" [f_deep]]);
+    ("regfree", unknown [drop "preg" [f]]);
     ("ffs", unknown [drop "i" []]);
     ("_exit", special [drop "status" []] @@ Abort);
     ("execvp", unknown [drop "file" [r]; drop "argv" [r_deep]]);
@@ -462,11 +462,11 @@ let posix_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("times", unknown [drop "buf" [w]]);
     ("mmap", unknown [drop "addr" []; drop "length" []; drop "prot" []; drop "flags" []; drop "fd" []; drop "offset" []]);
     ("munmap", unknown [drop "addr" []; drop "length" []]);
-    ("getline", unknown [drop "lineptr" [r_deep; w_deep]; drop "n" [r; w]; drop "stream" [r_deep; w_deep]]);
-    ("getwline", unknown [drop "lineptr" [r_deep; w_deep]; drop "n" [r; w]; drop "stream" [r_deep; w_deep]]);
-    ("getdelim", unknown [drop "lineptr" [r_deep; w_deep]; drop "n" [r; w]; drop "delimiter" []; drop "stream" [r_deep; w_deep]]);
-    ("__getdelim", unknown [drop "lineptr" [r_deep; w_deep]; drop "n" [r; w]; drop "delimiter" []; drop "stream" [r_deep; w_deep]]);
-    ("getwdelim", unknown [drop "lineptr" [r_deep; w_deep]; drop "n" [r; w]; drop "delimiter" []; drop "stream" [r_deep; w_deep]]);
+    ("getline", unknown [drop "lineptr" [r_deep; w_deep; f_deep]; drop "n" [r; w]; drop "stream" [r_deep; w_deep]]);
+    ("getwline", unknown [drop "lineptr" [r_deep; w_deep; f_deep]; drop "n" [r; w]; drop "stream" [r_deep; w_deep]]);
+    ("getdelim", unknown [drop "lineptr" [r_deep; w_deep; f_deep]; drop "n" [r; w]; drop "delimiter" []; drop "stream" [r_deep; w_deep]]);
+    ("__getdelim", unknown [drop "lineptr" [r_deep; w_deep; f_deep]; drop "n" [r; w]; drop "delimiter" []; drop "stream" [r_deep; w_deep]]);
+    ("getwdelim", unknown [drop "lineptr" [r_deep; w_deep; f_deep]; drop "n" [r; w]; drop "delimiter" []; drop "stream" [r_deep; w_deep]]);
     ("execlp", unknown (drop "file" [r] :: drop "arg" [r] :: VarArgs (drop' [r])));
     ("gai_strerror", unknown [drop "errcode" []]);
     ("getegid", unknown []);
@@ -1211,11 +1211,11 @@ let zlib_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("inflate", unknown [drop "strm" [r_deep; w_deep]; drop "flush" []]);
     ("inflateInit2", unknown [drop "strm" [r_deep; w_deep]; drop "windowBits" []]);
     ("inflateInit2_", unknown [drop "strm" [r_deep; w_deep]; drop "windowBits" []; drop "version" [r]; drop "stream_size" []]);
-    ("inflateEnd", unknown [drop "strm" [f_deep]]);
+    ("inflateEnd", unknown [drop "strm" [f]]);
     ("deflate", unknown [drop "strm" [r_deep; w_deep]; drop "flush" []]);
     ("deflateInit2", unknown [drop "strm" [r_deep; w_deep]; drop "level" []; drop "method" []; drop "windowBits" []; drop "memLevel" []; drop "strategy" []]);
     ("deflateInit2_", unknown [drop "strm" [r_deep; w_deep]; drop "level" []; drop "method" []; drop "windowBits" []; drop "memLevel" []; drop "strategy" []; drop "version" [r]; drop "stream_size" []]);
-    ("deflateEnd", unknown [drop "strm" [f_deep]]);
+    ("deflateEnd", unknown [drop "strm" [f]]);
     ("zlibVersion", unknown []);
     ("zError", unknown [drop "err" []]);
     ("gzopen", unknown [drop "path" [r]; drop "mode" [r]]);
@@ -1234,7 +1234,7 @@ let liblzma_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("lzma_stream_decoder", unknown [drop "strm" [r_deep; w_deep]; drop "memlimit" []; drop "flags" []]);
     ("lzma_alone_encoder", unknown [drop "strm" [r_deep; w_deep]; drop "options" [r_deep]]);
     ("lzma_easy_encoder", unknown [drop "strm" [r_deep; w_deep]; drop "preset" []; drop "check" []]);
-    ("lzma_end", unknown [drop "strm" [r_deep; w_deep; f_deep]]);
+    ("lzma_end", unknown [drop "strm" [r_deep; w_deep; f]]);
     ("lzma_version_string", unknown []);
     ("lzma_lzma_preset", unknown [drop "options" [w_deep]; drop "preset" []]);
   ]
