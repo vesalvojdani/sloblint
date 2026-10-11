@@ -94,7 +94,9 @@ struct
       man.local
     | _ ->
       LibraryDesc.Accesses.iter desc.accs (fun {kind; deep = reach} exp ->
-          access_one_top ~deref:true man kind reach exp (* access dereferenced using special accesses *)
+          match kind with
+          | Keep -> () (* keeping a pointer accesses no memory *)
+          | _ -> access_one_top ~deref:true man kind reach exp (* access dereferenced using special accesses *)
         ) arglist;
       Option.iter (fun x -> access_one_top ~deref:true man Write false (AddrOf x)) lv;
       List.iter (access_one_top man Read false) arglist; (* always read all argument expressions without dereferencing *)

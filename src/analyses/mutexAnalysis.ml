@@ -304,6 +304,7 @@ struct
               | Read -> Read
               | Call
               | Spawn -> Read (* TODO: nonsense? *)
+              | Keep -> Read (* not reached: AccessAnalysis emits no access for Keep *)
             in
             let s = GProtecting.make ~kind ~recovered:is_recovered_to_st locks in
             man.sideg (V.protecting v) (G.create_protecting s);

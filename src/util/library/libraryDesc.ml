@@ -122,6 +122,7 @@ type attr =
                      @see <https://man7.org/linux/man-pages/man7/pthreads.7.html> for list of thread-unsafe functions under POSIX.
                      @see <https://github.com/goblint/analyzer/issues/723> for Goblint issue about the (future) use of this attribute. *)
   | InvalidateGlobals (** Function invalidates all globals when called. *) (* TODO: AccessGlobals of Access.t list? *)
+  | KeepsSpecified (** The function's {!AccessKind.Keep} accesses name every argument it may keep a pointer derived from after it returns, as [putenv] keeps its [string] in the environment; it keeps no pointer derived from any other argument. Without this attribute every argument is taken to be kept, deeply: see {!kept}. *)
 
 (** Library function descriptor. *)
 type t = {
@@ -129,6 +130,17 @@ type t = {
   accs: Accesses.t; (** Pointer arguments access specification. *)
   attrs: attr list; (** Attributes of function. *)
 }
+
+(** The arguments of a call of the function [desc] describes with [args] that
+    it may keep a pointer derived from after it returns, as the pair of those
+    it keeps a pointer to the target of and those it keeps a pointer into
+    anything reachable from: the {!AccessKind.Keep} accesses of [desc] if it
+    has {!KeepsSpecified}; every argument, deeply, otherwise. *)
+let kept (desc: t) (args: Cil.exp list): Cil.exp list * Cil.exp list =
+  if List.mem KeepsSpecified desc.attrs then
+    Accesses.find desc.accs { kind = Keep; deep = false } args, Accesses.find desc.accs { kind = Keep; deep = true } args
+  else
+    [], args
 
 module MathPrintable = struct
   include Printable.StdLeaf
