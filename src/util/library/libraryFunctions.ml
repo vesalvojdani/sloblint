@@ -130,6 +130,12 @@ let c_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("time", unknown [drop "arg" [w]]);
     ("tmpnam", unknown ~attrs:[ThreadUnsafe] [drop "filename" [w]]);
     ("vprintf", unknown [drop "format" [r]; drop "vlist" [r_deep]]); (* TODO: what to do with a va_list type? is r_deep correct? *)
+    ("vscanf", unknown [drop "format" [r]; drop "vlist" [r_deep; w_deep]]);
+    ("vwprintf", unknown [drop "format" [r]; drop "vlist" [r_deep]]);
+    ("vwscanf", unknown [drop "format" [r]; drop "vlist" [r_deep; w_deep]]);
+    ("putwchar", unknown [drop "wc" []]);
+    ("getwchar", unknown []);
+    ("gets", unknown [drop "str" [w]]);
     ("vfprintf", unknown [drop "stream" [r_deep; w_deep]; drop "format" [r]; drop "vlist" [r_deep]]); (* TODO: what to do with a va_list type? is r_deep correct? *)
     ("vsprintf", unknown [drop "buffer" [w]; drop "format" [r]; drop "vlist" [r_deep]]); (* TODO: what to do with a va_list type? is r_deep correct? *)
     ("asprintf", unknown (drop "strp" [w] :: drop "format" [r] :: VarArgs (drop' [r_deep]))); (* TODO: glibc section? *)
@@ -244,6 +250,7 @@ let posix_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("mrand48", unknown ~attrs:[ThreadUnsafe] []);
     ("nl_langinfo", unknown ~attrs:[ThreadUnsafe] [drop "item" []]);
     ("nl_langinfo_l", unknown [drop "item" []; drop "locale" [r_deep]]);
+    ("psignal", unknown [drop "sig" []; drop "s" [r]]);
     ("getc_unlocked", unknown ~attrs:[ThreadUnsafe] [drop "stream" [r_deep; w_deep]]);
     ("getchar_unlocked", unknown ~attrs:[ThreadUnsafe] []);
     ("ptsname", unknown ~attrs:[ThreadUnsafe] [drop "fd" []]);
@@ -669,12 +676,44 @@ let glibc_desc_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("futimesat", unknown [drop "dirfd" []; drop "pathname" [r]; drop "times" [r]]);
     ("error", unknown ((drop "status" []) :: (drop "errnum" []) :: (drop "format" [r]) :: (VarArgs (drop' [r]))));
     ("warn", unknown (drop "format" [r] :: VarArgs (drop' [r])));
+    ("warnx", unknown (drop "format" [r] :: VarArgs (drop' [r])));
+    ("vwarn", unknown [drop "format" [r]; drop "ap" [r_deep]]);
+    ("vwarnx", unknown [drop "format" [r]; drop "ap" [r_deep]]);
+    ("err", special (drop "status" [] :: drop "format" [r] :: VarArgs (drop' [r])) Abort);
+    ("errx", special (drop "status" [] :: drop "format" [r] :: VarArgs (drop' [r])) Abort);
+    ("verr", special [drop "status" []; drop "format" [r]; drop "ap" [r_deep]] Abort);
+    ("verrx", special [drop "status" []; drop "format" [r]; drop "ap" [r_deep]] Abort);
+    ("setbuffer", unknown [drop "stream" [r_deep; w_deep]; drop "buf" [r; w]; drop "size" []]);
+    ("setlinebuf", unknown [drop "stream" [r_deep; w_deep]]);
     ("gettext", unknown [drop "msgid" [r]]);
     ("euidaccess", unknown [drop "pathname" [r]; drop "mode" []]);
     ("rpmatch", unknown [drop "response" [r]]);
     ("getpagesize", unknown []);
     ("__fgets_alias", unknown [drop "__s" [w]; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
     ("__fgets_chk", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    (* glibc's fortified and aliased stdio entry points, which <bits/stdio2.h> calls in place of the plain ones *)
+    ("__fgets_chk_warn", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("fgets_unlocked", unknown [drop "s" [w]; drop "n" []; drop "stream" [r_deep; w_deep]]);
+    ("__fgets_unlocked_alias", unknown [drop "__s" [w]; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("__fgets_unlocked_chk", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("__fgets_unlocked_chk_warn", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("fgetws", unknown [drop "ws" [w]; drop "n" []; drop "stream" [r_deep; w_deep]]);
+    ("__fgetws_alias", unknown [drop "__s" [w]; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("__fgetws_chk", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("__fgetws_chk_warn", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("fgetws_unlocked", unknown [drop "ws" [w]; drop "n" []; drop "stream" [r_deep; w_deep]]);
+    ("__fgetws_unlocked_alias", unknown [drop "__s" [w]; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("__fgetws_unlocked_chk", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("__fgetws_unlocked_chk_warn", unknown [drop "__s" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
+    ("fgetc_unlocked", unknown [drop "stream" [r_deep; w_deep]]);
+    ("fputc_unlocked", unknown [drop "c" []; drop "stream" [r_deep; w_deep]]);
+    ("fflush_unlocked", unknown [drop "stream" [r_deep; w_deep]]);
+    ("__vprintf_chk", unknown [drop "flag" []; drop "format" [r]; drop "ap" [r_deep]]);
+    ("__wprintf_chk", unknown (drop "flag" [] :: drop "format" [r] :: VarArgs (drop' [r])));
+    ("__vwprintf_chk", unknown [drop "flag" []; drop "format" [r]; drop "ap" [r_deep]]);
+    ("__fwprintf_chk", unknown (drop "stream" [r_deep; w_deep] :: drop "flag" [] :: drop "format" [r] :: VarArgs (drop' [r])));
+    ("__vfwprintf_chk", unknown [drop "stream" [r_deep; w_deep]; drop "flag" []; drop "format" [r]; drop "ap" [r_deep]]);
+    ("__gets_chk", unknown [drop "buf" [w]; drop "size" []]);
     ("__fread_alias", unknown [drop "__ptr" [w]; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
     ("__fread_chk", unknown [drop "__ptr" [w]; drop "__ptrlen" []; drop "__size" []; drop "__n" []; drop "__stream" [r_deep; w_deep]]);
     ("__fread_chk_warn", unknown [drop "buffer" [w]; drop "os" []; drop "size" []; drop "count" []; drop "stream" [r_deep; w_deep]]);
@@ -686,7 +725,7 @@ let glibc_desc_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("__read_alias", unknown [drop "__fd" []; drop "__buf" [w]; drop "__nbytes" []]);
     ("__readlink_chk", unknown [drop "path" [r]; drop "buf" [w]; drop "len" []; drop "buflen" []]);
     ("__readlink_alias", unknown [drop "path" [r]; drop "buf" [w]; drop "len" []]);
-    ("__overflow", unknown [drop "f" [r]; drop "ch" []]);
+    ("__overflow", unknown [drop "f" [r; w]; drop "ch" []]); (* writes [ch] into the stream's buffer, flushing it when full *)
     ("__ctype_get_mb_cur_max", unknown []);
     ("__maskrune", unknown [drop "c" []; drop "f" []]);
     ("__xmknod", unknown [drop "ver" []; drop "path" [r]; drop "mode" []; drop "dev" [r; w]]);
