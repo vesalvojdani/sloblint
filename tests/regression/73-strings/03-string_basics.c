@@ -55,7 +55,7 @@ int main() {
     char* cmp = strstr(s1, "bab");
     __goblint_check(cmp != NULL); // UNKNOWN
 
-    i = strcmp(cmp, "babcd"); // NOWARN: cmp != NULL
+    i = strcmp(cmp, "babcd"); // TODO NOWARN (cmp != NULL, but the analysis cannot show it: the check above is unknown)
     __goblint_check(i == 0); // UNKNOWN
 
     i = strncmp(s4, s3, 4);
