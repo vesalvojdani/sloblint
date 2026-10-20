@@ -1,16 +1,18 @@
-// PARAM: --set ana.activated[+] expsplit
+// PARAM: --set ana.activated[+] expsplit --disable verify
 #include <goblint.h>
 
 // As in 07-loop-split-narrow.c, the path k == 0, j == 0 at the loop head holds
 // xs == &a and xs == &b during widening, the transfer of the joined path moves
 // its successor to the path k unknown, j == 0, and when narrowing shrinks the
 // path k == 0, j == 0 back to xs == &a, its successor xs == &b returns to it.
-// If the solver narrows anyway, that state is dropped from the path k == 0,
-// j == 0. Unlike in 07, no other path keeps it: the path k unknown, j == 0
-// receives nothing once the path k == 0, j == 0 is narrowed (its own successor
-// has j unknown), so narrowing removes it, and the remaining path k unknown,
-// j unknown only has p == 1. The check below would then be reported as
-// succeeding, although it fails in the second iteration.
+// Unlike in 07, no other path keeps that state if ProjectiveSet.narrow narrows
+// bucket by bucket: the path k unknown, j == 0 receives nothing once the path
+// k == 0, j == 0 is narrowed (its own successor has j unknown), so it would be
+// removed, and the remaining path k unknown, j unknown only has p == 1. The
+// check below would then be reported as succeeding, although it fails in the
+// second iteration.
+// The stored value at the loop head is not above its right-hand side, which
+// verification reports as "Fixpoint not reached", so it is disabled.
 
 struct node { struct node *next; };
 

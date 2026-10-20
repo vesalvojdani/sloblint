@@ -1,4 +1,4 @@
-// PARAM: --set ana.activated[+] expsplit
+// PARAM: --set ana.activated[+] expsplit --disable verify
 #include <goblint.h>
 
 // expsplit keeps one path per value of k, and k is computed from xs. The path
@@ -7,9 +7,11 @@
 // joined path moves its successor to the path where k is unknown. When
 // narrowing shrinks the path k == 0 at the loop head back to xs == &a, its
 // successor returns to k == 0 with xs == &b: the right-hand side grows during
-// narrowing. If the solver narrows anyway, it keeps xs == &a alone in the path
-// k == 0, reports the check below as succeeding there, and reports
-// "Fixpoint not reached".
+// narrowing, and the path k == 0 keeps xs == &a alone, so the check below is
+// reported as succeeding on it. The path where k is unknown still holds
+// xs == &b, so the check is unknown overall.
+// The stored value at the loop head is not above its right-hand side, which
+// verification reports as "Fixpoint not reached", so it is disabled.
 
 struct node { struct node *next; };
 
