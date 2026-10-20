@@ -411,7 +411,18 @@ struct
     (* sequence of assignments: i' = snd vv_i : *)
     let multi_t = List.fold_left2 (fun t' v_prime (_,v') -> assign_var t' v_prime v') t_primed primed_vars vv's in
     match multi_t.d with
-    | Some m when not @@ is_top_env multi_t ->                    (* SUBSTITUTE assigned_vars/primed_vars via OVERWRITE & ERASE *)
+    | Some _ when not @@ is_top_env multi_t ->                    (* SUBSTITUTE assigned_vars/primed_vars via FORGET, OVERWRITE & ERASE *)
+      (* Forget the assigned variables, so that their columns are zero.
+         After the overwrite, each assigned variable carries the constraints
+         of its primed variable, and the primed columns are then erased.
+         Without the forget, the overwrite would drop the old value's term
+         from every row that mentions it. The assigned variables can be
+         constrained already: [RelationAnalysis.body] assigns the formals,
+         and the relation still constrains them for the caller's activation
+         of the same function when a recursive call passes the address of a
+         local. *)
+      let multi_t = forget_vars multi_t assigned_vars in
+      let m = Option.get multi_t.d in
       let replace_col m x y =                                     (* OVERWRITES column for var_y with column for var_x *)
         let dim_x, dim_y = Environment.dim_of_var multi_t.env x, Environment.dim_of_var multi_t.env y in
         let col_x = Matrix.get_col_upper_triangular m dim_x in
