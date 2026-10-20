@@ -2526,6 +2526,20 @@ struct
     in
     (* Evaluate each functions arguments. `eval_rv` is only called for its side effects, we ignore the result. *)
     List.iter (fun arg -> eval_rv ~man st arg |> ignore) args;
+    (* C11 7.24.1p2 requires every pointer argument of the string functions to
+       be valid, also when a length argument is 0. Evaluating each one
+       dereferenced as an lvalue makes [eval_lv] report a pointer that is or
+       may be NULL. The casts are kept: without them, [(char * )0] and a
+       [void *] variable assigned NULL evaluate to the integer 0, which
+       [eval_lv] does not report. *)
+    let string_arguments = match desc.special args with
+      | Strcpy { dest; src; _ } | Strcat { dest; src; _ } -> [dest; src]
+      | Strlen s -> [s]
+      | Strstr { haystack; needle } -> [haystack; needle]
+      | Strcmp { s1; s2; _ } -> [s1; s2]
+      | _ -> []
+    in
+    List.iter (fun arg -> eval_lv ~man st (mkMem ~addr:arg ~off:NoOffset) |> ignore) string_arguments;
     let st = match desc.special args, f.vname with
     | Memset { dest; ch; count; }, _ ->
       (* TODO: check count *)
