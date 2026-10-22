@@ -129,7 +129,14 @@ struct
         | b' ->
           Some b'
       ) m1 m2
+  (** Narrows bucket by bucket if [m2] is below [m1], and returns [m1] otherwise.
+      An element can be in buckets with different representatives in [m1] and in [m2], and narrowing bucket by bucket can then lose it:
+      a bucket of [m1] that [m2] does not have is removed, and a bucket of [m1] is narrowed by the bucket of [m2] with the same representative.
+      If [m2] is below [m1], each bucket of the result is above the bucket of [m2] with its representative, so the result is above [m2]. *)
   let narrow m1 m2 =
+    if not (M.leq m2 m1) then
+      m1
+    else
     M.nonidempotent_inter_filter (fun b1 b2 -> (* TODO: idempotent_inter_filter if not using int domain refinement *)
         match B.narrow b1 b2 with
         | b' when B.is_bot b' ->
