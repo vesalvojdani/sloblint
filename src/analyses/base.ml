@@ -2300,6 +2300,15 @@ struct
     let st' = invalidate ~must:false ~deep:false ~man man.local shallow_addrs in
     invalidate ~must:false ~deep:true ~man st' deep_addrs
 
+  (** Checks [ptr], the pointer passed to the deallocating function
+      [special_fn] ([free] or [realloc]). When [ptr] evaluates to addresses,
+      it reports a top address set, an address of a variable that is not
+      heap-allocated, and an address at an offset that may be nonzero.
+      When [ptr] evaluates to something other than addresses, it reports
+      that, except for a definitely zero integer: [VD.cast] keeps an integer
+      cast to [void *] as an integer, so Base evaluates [(void * )0], and a
+      [void *] variable assigned it, to the integer 0, and C11 7.22.3.3 and
+      7.22.3.5 define [free] and [realloc] for a null pointer. *)
   let check_invalid_mem_dealloc man special_fn ptr =
     let has_non_heap_var = AD.exists (function
         | Addr (v,_) -> is_not_heap_alloc_var man v
@@ -2326,6 +2335,8 @@ struct
       ) else (
         Checks.safe Checks.Category.InvalidMemoryAccess
       )
+    | Int i when ID.to_int i = Some Z.zero ->
+      Checks.safe Checks.Category.InvalidMemoryAccess
     | _ ->
       AnalysisStateUtil.set_mem_safety_flag InvalidFree;
       M.warn ~category:(Behavior (Undefined InvalidMemoryDeallocation)) ~tags:[CWE 590] "Pointer %a in function %s doesn't evaluate to a valid address. Invalid memory deallocation may occur" d_exp ptr special_fn.vname;
