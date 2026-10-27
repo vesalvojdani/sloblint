@@ -1059,9 +1059,9 @@ let add_eq cc (t1, t2, r) =
   cc
 
 (** Adds block disequalities to cc:
-    for each representative t in cc it adds the disequality bl(lterm) != bl(t)*)
-let add_block_diseqs cc lterm =
-  let representatives = TUF.get_representatives cc.uf in
+    for each representative t in cc for which [keep t] holds, it adds the disequality bl(lterm) != bl(t)*)
+let add_block_diseqs ?(keep = fun _ -> true) cc lterm =
+  let representatives = List.filter keep (TUF.get_representatives cc.uf) in
   let bldis = BlDis.add_block_diseqs cc.bldis cc.uf lterm representatives in
   {cc with bldis}
 

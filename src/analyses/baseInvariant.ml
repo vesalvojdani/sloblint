@@ -153,6 +153,12 @@ struct
 
 
   let invariant_fallback man st exp tv =
+    (* Whether the value of e may be equal to a pointer to an address in n although they share no address, see BaseUtil.may_equal_through_empty_alloca. *)
+    let may_equal_through_empty_alloca e n =
+      match eval_rv_address ~man st e with
+      | Address a -> BaseUtil.may_equal_through_empty_alloca (Analyses.ask_of_man man) a n
+      | _ -> false
+    in
     (* We use a recursive helper function so that x != 0 is false can be handled
      * as x == 0 is true etc *)
     let rec helper (op: binop) (lval: lval) (value: VD.t) (tv: bool): [> `Refine of lval * VD.t | `NotUnderstood] =
@@ -164,6 +170,9 @@ struct
          | Int n ->
            let ikind = Cilfacade.get_ikind_exp (Lval lval) in
            `Refine (x, Int (ID.cast_to ~kind:Internal ikind n)) (* TODO: proper castkind *)
+         | Address n when may_equal_through_empty_alloca (Lval x) n ->
+           (* x may be equal to value without sharing an address with it, so the meet of the two would exclude executions. *)
+           `NothingToRefine
          | _ -> `Refine (x, value))
       (* The false-branch for x == value: *)
       | Eq, x, value, false -> begin
