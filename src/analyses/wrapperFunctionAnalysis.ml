@@ -153,14 +153,28 @@ module MallocWrapper = struct
 
   let name () = "mallocWrapper"
 
+  (* Node whose counter identifies the block allocated at the current call:
+     a heap allocation inside a wrapper is identified by the call to the wrapper,
+     a stack allocation (alloca) always by its own call. *)
+  let alloc_node man (location: Q.AllocationLocation.t) =
+    match location, fst man.local with
+    | Heap, `Lifted wrapper_node -> wrapper_node
+    | _, _ -> node_for_man man
+
+  let special man lval f arglist =
+    match (LibraryFunctions.find f).special arglist with
+    | Alloca _ ->
+      (* Each alloca call in a loop or in a recursive call allocates a new block, which lives until its function returns.
+         Count it like a wrapped allocation, so that UniqueCount marks the block as IsMultiple once it may stand for several. *)
+      let wrapper_node, counter = man.local in
+      (wrapper_node, add_unique_call counter (alloc_node man Stack))
+    | _ -> special man lval f arglist
+
   let query (man: (D.t, G.t, C.t, V.t) man) (type a) (q: a Q.t): a Q.result =
-    let wrapper_node, counter = man.local in
+    let _, counter = man.local in
     match q with
     | Q.AllocVar location ->
-      let node = match wrapper_node with
-        | `Lifted wrapper_node -> wrapper_node
-        | _ -> node_for_man man
-      in
+      let node = alloc_node man location in
       let count = UniqueCallCounter.find (`Lifted node) counter in
       let var = NodeVarinfoMap.to_varinfo (man.ask Q.CurrentThreadId, node, count) in
       var.vdecl <- UpdateCil.getLoc node; (* TODO: does this do anything bad for incremental? *)
