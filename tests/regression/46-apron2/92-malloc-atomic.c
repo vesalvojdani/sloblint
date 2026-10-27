@@ -1,4 +1,4 @@
-// SKIP PARAM: --set ana.activated[+] apron  --set ana.relation.privatization mutex-meet-atomic --set ana.apron.domain interval --set sem.int.signed_overflow assume_none
+// SKIP PARAM: --set ana.activated[+] apron --set ana.malloc.unique_address_count 1  --set ana.relation.privatization mutex-meet-atomic --set ana.apron.domain interval --set sem.int.signed_overflow assume_none
 // Checks that assinging to malloc'ed memory does not cause both branches to be dead
 #include <stdlib.h>
 #include <pthread.h>

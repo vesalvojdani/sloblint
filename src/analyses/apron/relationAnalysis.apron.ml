@@ -213,7 +213,18 @@ struct
     | exception Invalid_argument _ ->
       rel
 
-  let replace_deref_exps ask e =
+  (** Replace each dereference [*p] in [e] by the lvalue of the one address [p]
+      may point to, so that the relational domain can read it.
+
+      A dereference stays in place if [p] may point to more than one address,
+      if the pointee's type differs from that of [*p], or if
+      [Queries.IsMultiple] holds of the pointee's variable. Such a variable,
+      for example a heap variable standing for several blocks of one allocation
+      site or a local of a recursive function standing for its copies in
+      several calls, has one relational variable for all its cells, so
+      replacing [*p] and [*q] that read two of the cells by it would relate
+      the two reads as equal. *)
+  let replace_deref_exps (ask: Queries.ask) e =
     let rec inner e = match e with
       | Const x -> e
       | UnOp (unop, e, typ) -> UnOp(unop, inner e, typ)
@@ -221,7 +232,7 @@ struct
       | CastE (k,t,e) -> CastE (k, t, inner e)
       | Lval (Var v, off) -> Lval (Var v, off)
       | Lval (Mem e, NoOffset) ->
-        begin match ask (Queries.MayPointTo e) with
+        begin match ask.f (Queries.MayPointTo e) with
           | ad when not (Queries.AD.is_top ad) && (Queries.AD.cardinal ad) = 1 ->
             let replace mval =
               try
@@ -237,7 +248,10 @@ struct
               with Cilfacade.TypeOfError _ ->
                 None
             in
-            let r = Option.bind (Queries.AD.Addr.to_mval (Queries.AD.choose ad)) replace in
+            let replace_single ((v, _) as mval) =
+              if ask.f (Queries.IsMultiple v) then None else replace mval
+            in
+            let r = Option.bind (Queries.AD.Addr.to_mval (Queries.AD.choose ad)) replace_single in
             Option.default (Lval (Mem e, NoOffset)) r
           (* It would be possible to do better here, exploiting e.g. that the things pointed to are known to be equal *)
           (* see: https://github.com/goblint/analyzer/pull/742#discussion_r879099745 *)
@@ -250,7 +264,7 @@ struct
   (* Basic transfer functions. *)
   let assign man (lv:lval) e =
     let st = man.local in
-    let simplified_e = replace_deref_exps man.ask e in
+    let simplified_e = replace_deref_exps (Analyses.ask_of_man man) e in
     if M.tracing then M.traceli "relation" "assign %a = %a (simplified to %a)" d_lval lv  d_exp e d_exp simplified_e;
     let ask = Analyses.ask_of_man man in
     let r = assign_to_global_wrapper ask man.global man.sideg st lv (fun st v ->
@@ -639,7 +653,7 @@ struct
     let open Queries in
     let st = man.local in
     let eval_int e no_ov =
-      let esimple = replace_deref_exps man.ask e in
+      let esimple = replace_deref_exps (Analyses.ask_of_man man) e in
       read_from_globals_wrapper
         (Analyses.ask_of_man man)
         man.global st esimple
@@ -706,7 +720,7 @@ struct
     | Events.Unassume {exp = e; tokens} ->
       let e_orig = e in
       let ask = Analyses.ask_of_man man in
-      let e = replace_deref_exps man.ask e in
+      let e = replace_deref_exps ask e in
       let (rel, e, v_ins) = read_globals_to_locals ask man.global man.local e in
 
       let vars = Basetype.CilExp.get_vars e |> List.unique ~eq:CilType.Varinfo.equal |> List.filter RD.Tracked.varinfo_tracked in
@@ -719,7 +733,7 @@ struct
            full state *)
         let f (type a) (q : a Queries.t) : a =
           let eval_int e no_ov =
-            let esimple = replace_deref_exps dummyask.f e in
+            let esimple = replace_deref_exps dummyask e in
             read_from_globals_wrapper
               (dummyask)
               man.global { st with rel } esimple
