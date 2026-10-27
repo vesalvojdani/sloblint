@@ -1603,16 +1603,22 @@ struct
         | _ -> Queries.Result.top q
       end
     | Q.ReachableFrom e -> begin
-        match eval_rv_address ~man man.local e with
-        | Top -> Queries.Result.top q
-        | Bot -> Queries.Result.bot q (* TODO: remove *)
-        | Address a ->
+        let reachable_from_addrs a =
           let a' = AD.remove Addr.UnknownPtr a in (* run reachable_vars without unknown just to be safe: TODO why? *)
           let addrs = reachable_vars ~man man.local a' in
           if AD.may_be_unknown a then
             AD.add UnknownPtr addrs (* add unknown back *)
           else
             addrs
+        in
+        match eval_rv_address ~man man.local e with
+        | Top -> Queries.Result.top q
+        | Bot -> Queries.Result.bot q (* TODO: remove *)
+        | Address a -> reachable_from_addrs a
+        | (Struct _ | Union _ | Array _ | Blob _) as v ->
+          (* A struct, union, array or blob value reaches what the pointers stored in it reach, as in [collect_funargs]. *)
+          let t = try Cilfacade.typeOf e with Cilfacade.TypeOfError _ -> voidType in
+          reachable_from_addrs (reachable_from_value (Analyses.ask_of_man man) v t (CilType.Exp.show e))
         | Int i ->
           begin match Cilfacade.typeOf e with
             | t when Cil.isPointerType t -> AD.of_int i (* integer used as pointer *)
