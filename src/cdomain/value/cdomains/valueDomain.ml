@@ -1357,6 +1357,13 @@ struct
 
   let rec ad_invariant ~vs ~offset ~lval x =
     let c_exp = Lval lval in
+    let is_va_list = match Cil.unrollType (Cilfacade.typeOfLval lval) with
+      | TBuiltin_va_list _ -> true
+      | _ -> false
+      | exception Cilfacade.TypeOfError _ -> false
+    in
+    (* A va_list points to the arguments of a variadic call, which no C expression names. *)
+    if is_va_list then Invariant.none else
     let is_opt = AD.fold (fun addr acc_opt ->
         let* acc = acc_opt in
         match addr with
