@@ -37,9 +37,25 @@ struct
         ) man.local;
       D.add after man.local
 
+    (** Removes the lock events of [l] from the may-lockset if [l] is not the
+        address of a variable or [Queries.MutexType] reports it as
+        non-recursive. Otherwise the events are kept: a recursive mutex that
+        was locked more than once is still held after one unlock, and a mutex
+        of unknown type may be recursive. *)
     let remove man l =
-      let inLockAddrs (e, _, _) = Lock.equal l e in
-      D.filter (neg inLockAddrs) man.local
+      let may_be_recursive = match Lock.to_mval l with
+        | Some (v, o) ->
+          begin match man.ask (Queries.MutexType (v, Offset.Unit.of_offs o)) with
+            | `Lifted MutexAttrDomain.MutexKind.NonRec -> false
+            | _ -> true
+          end
+        | None -> false
+      in
+      if may_be_recursive then
+        man.local
+      else
+        let inLockAddrs (e, _, _) = Lock.equal l e in
+        D.filter (neg inLockAddrs) man.local
   end
 
   include LocksetAnalysis.MakeMay (Arg)
