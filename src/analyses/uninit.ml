@@ -44,10 +44,10 @@ struct
   let rec access_one_byval a rw (exp:exp) =
     match exp with
     | Const _
-    | SizeOf _
     | SizeOfStr _
     | AlignOf _
     | AddrOfLabel _ -> []
+    | SizeOf t -> access_type_byval a t
     (* Variables and address expressions *)
     | Lval lval -> access_address a rw lval @ (access_lv_byval a lval)
     (* Binary operators *)
@@ -79,6 +79,19 @@ struct
     match lval with
     | Var x, ofs -> access_offset ofs
     | Mem n, ofs -> access_one_byval a false n @ access_offset ofs
+  (* Accesses during the evaluation of the array lengths in type [t], which sizeof of a variable-length array type evaluates (C11 6.5.3.4p2).
+     As in [Access.distribute_access_type], lengths under a pointer or function type are not followed: they do not change the size,
+     C leaves unspecified whether sizeof evaluates them (C11 6.7.6.2p5), and GCC does not.
+     Lengths under a typedef name are not followed either, since they are evaluated at the typedef (C11 6.7.8p3). *)
+  and access_type_byval a (t:typ) =
+    match t with
+    | TArray (et, len, _) ->
+      let len_accesses = match len with
+        | Some e -> access_one_byval a false e
+        | None -> []
+      in
+      len_accesses @ access_type_byval a et
+    | _ -> []
 
   (* list accessed addresses *)
   let varoffs a (rval:exp) =
@@ -225,6 +238,27 @@ struct
 
   let branch man (exp:exp) (tv:bool) : trans_out =
     ignore (is_expr_initd (Analyses.ask_of_man man) exp man.local);
+    man.local
+
+  (* The lengths of the variable-length array declarators in type [t], which the declaration of a variable of type [t] evaluates (C11 6.8p3).
+     Unlike for sizeof, these include lengths under a pointer, as in the declaration of a pointer to a variable-length array,
+     and in the return type of a function type, as in the declaration of a pointer to a function returning a pointer to one.
+     Lengths in parameter types are not included, since they are not evaluated (C11 6.7.6.2p5),
+     and neither are those under a typedef name, which are evaluated at the typedef (C11 6.7.8p3). *)
+  let rec decl_lengths (t:typ) : exp list =
+    match t with
+    | TArray (et, len, _) ->
+      let lens = match len with
+        | Some e -> [e]
+        | None -> []
+      in
+      lens @ decl_lengths et
+    | TPtr (t, _) -> decl_lengths t
+    | TFun (rt, _, _, _) -> decl_lengths rt
+    | _ -> []
+
+  let vdecl man (v:varinfo) : trans_out =
+    List.iter (fun e -> ignore (is_expr_initd (Analyses.ask_of_man man) e man.local)) (decl_lengths v.vtype);
     man.local
 
   let body man (f:fundec) : trans_out =
