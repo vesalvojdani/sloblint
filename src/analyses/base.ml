@@ -1895,7 +1895,10 @@ struct
     let update_one x store =
       match x with
       | Addr.Addr (v, _) when Cilfacade.is_varargs_var v ->
-        (* A write to an argument variable writes the representation of a va_list, after which va_arg may read anything. *)
+        (* A write to an argument variable writes the representation of a va_list, after which va_arg may read anything.
+           The argument variables are local to the thread that bound them or received them when it was created. *)
+        if ThreadFlag.has_ever_been_multi (Analyses.ask_of_man man) then
+          Assumptions.add "A write to the representation of a va_list is not seen by va_arg in another thread";
         { store with BaseDomain.cpa = CPA.add v (VD.top_value v.vtype) store.BaseDomain.cpa }
       | _ ->
         set_addr ~man ?invariant ?blob_destructive ?lval_raw ?rval_raw ?t_override store x lval_type value
