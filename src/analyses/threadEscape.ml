@@ -27,33 +27,24 @@ struct
   module V = VarinfoV
   module G = ThreadIdSet
 
-  let reachable (ask: Queries.ask) e: D.t =
-    match ask.f (Queries.ReachableFrom e) with
-    | ad when not (Queries.AD.is_top ad) ->
-      let to_extra addr set =
-        match addr with
-        | Queries.AD.Addr.Addr (v,_) -> D.add v set
-        | _ -> set
-      in
-      Queries.AD.fold to_extra ad (D.empty ())
-    (* Ignore soundness warnings, as invalidation proper will raise them. *)
-    | ad ->
-      if M.tracing then M.tracel "escape" "reachable %a: %a" d_exp e Queries.AD.pretty ad;
-      D.empty ()
-
-  let mpt (ask: Queries.ask) e: D.t =
-    match ask.f (Queries.MayPointTo e) with
-    | ad when not (AD.is_top ad) ->
-      let to_extra addr set =
+  (** Variables of the addresses in [ad]. An [UnknownPtr] in [ad] contributes no
+      variable, and the variables of the other addresses in [ad] are still included. *)
+  let vars_of_ad (ad: AD.t): D.t =
+    AD.fold (fun addr set ->
         match addr with
         | AD.Addr.Addr (v,_) -> D.add v set
         | _ -> set
-      in
-      AD.fold to_extra (AD.remove UnknownPtr ad) (D.empty ())
-    (* Ignore soundness warnings, as invalidation proper will raise them. *)
-    | ad ->
-      if M.tracing then M.tracel "escape" "mpt %a: %a" d_exp e AD.pretty ad;
-      D.empty ()
+      ) ad (D.empty ())
+
+  let reachable (ask: Queries.ask) e: D.t =
+    let ad = ask.f (Queries.ReachableFrom e) in
+    if M.tracing then M.tracel "escape" "reachable %a: %a" d_exp e AD.pretty ad;
+    vars_of_ad ad
+
+  let mpt (ask: Queries.ask) e: D.t =
+    let ad = ask.f (Queries.MayPointTo e) in
+    if M.tracing then M.tracel "escape" "mpt %a: %a" d_exp e AD.pretty ad;
+    vars_of_ad ad
 
   let thread_id man =
     man.ask Queries.CurrentThreadId
