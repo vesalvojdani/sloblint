@@ -49,6 +49,8 @@ struct
       man.local (* don't remove any locks, including unknown itself *)
     | Events.Unlock Addr (v, _) when man.ask (IsMultiple v) ->
       man.local (* don't remove non-unique lock *)
+    | Events.Unlock Addr mv when not (ValueDomain.Mval.is_definite mv) ->
+      man.local (* don't remove lock with non-definite offset: unlocking M[?] may release a different element than a held M[?] *)
     | Events.Unlock l ->
       Arg.remove man l (* remove definite lock or none in parallel if ambiguous *)
     | _ ->
