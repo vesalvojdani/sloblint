@@ -409,6 +409,12 @@ struct
     | a, b -> a = b
 
   let cast_addr t a =
+    (* Whether the offset ends in a field that is a bit-field. *)
+    let rec ends_in_bitfield = function
+      | `Field ({fbitfield = Some _; _}, `NoOffset) -> true
+      | `Field (_, o) | `Index (_, o) -> ends_in_bitfield o
+      | `NoOffset -> false
+    in
     let rec stripVarLenArr t =
       match Cil.unrollType t with
       | TPtr(t, args) -> TPtr(stripVarLenArr t, args)
@@ -422,6 +428,10 @@ struct
       let info = GobPretty.sprintf "Ptr-Cast %a from %a to %a" Addr.pretty (Addr.Addr (v,o)) d_type ta d_type t in
       if M.tracing then M.tracel "casta" "%s" info; (* TODO: inline info? *)
       let err s = raise (CastError (s ^ " (" ^ info ^ ")")) in
+      (* No address ends in a bit-field. A converted pointer to a struct or union whose first field is a bit-field points
+         to the storage unit holding the bit-field (C11 6.7.2.1p15-16), which may also hold the bit-fields that follow,
+         and no offset denotes that unit. *)
+      if ends_in_bitfield o then err "Ptr-cast to a bit-field." else
       match Stdlib.compare (bitsSizeOf (stripVarLenArr t)) (bitsSizeOf (stripVarLenArr ta)) with (* TODO is it enough to compare the size? -> yes? *)
       | 0 ->
         if M.tracing then M.tracel "casta" "same size";
