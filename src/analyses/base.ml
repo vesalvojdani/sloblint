@@ -1259,10 +1259,21 @@ struct
     fp
 
   (** Evaluate expression as address.
-      Avoids expensive Apron EvalInt if the Int result would be useless to us anyway. *)
+      Avoids expensive Apron EvalInt if the Int result would be useless to us anyway.
+      An lvalue of integer type evaluates to the address set that its object holds, if it holds one,
+      as it does after a pointer is written through a cast of its address. *)
   let eval_rv_address ~man st e =
     (* no way to do eval_rv with expected type, so filter expression beforehand *)
     match Cilfacade.typeOf e with
+    | t when Cil.isIntegralType t ->
+      begin match e with
+        | Lval lv ->
+          begin match get ~man st (eval_lv ~man st lv) None with
+            | Address _ as v -> v
+            | _ -> VD.top_value t
+          end
+        | _ -> VD.top_value t
+      end
     | t when Cil.isArithmeticType t -> (* definitely not address *)
       VD.top_value t
     | exception Cilfacade.TypeOfError _ (* something weird, might be address *)
