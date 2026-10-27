@@ -724,11 +724,12 @@ struct
     %> f (ContextUtil.should_keep ~isAttr:GobContext ~keepOption:"ana.base.context.bitfield" ~removeAttr:"base.no-bitfield" ~keepAttr:"base.bitfield" fd) drop_bitfield
 
 
-  let reachable_top_pointers_types man (ps: AD.t) : Queries.TS.t =
+  (** Types pointed to by unknown pointers in struct and union fields, reachable from the addresses [ps] and from [value]. *)
+  let reachable_top_pointers_types man ?(value=VD.bot ()) (ps: AD.t) : Queries.TS.t =
     let@ () = GobRef.wrap AnalysisState.executing_speculative_computations true in
     let module TS = Queries.TS in
     let empty = AD.empty () in
-    let reachable_from_address (adr: address) =
+    let reachable_from_value (value: value) =
       let with_type t = function
         | (ad,ts,true) ->
           begin match unrollType t with
@@ -766,15 +767,16 @@ struct
         | JmpBuf _ -> (empty, TS.bot (), false) (* TODO: is this right? *)
         | Mutex -> (empty, TS.bot (), false) (* TODO: is this right? *)
       in
-      reachable_from_value (get ~man man.local adr None)
+      reachable_from_value value
     in
+    let (value_addrs, value_types, _) = reachable_from_value value in
     let visited = ref empty in
-    let work = ref ps in
-    let collected = ref (TS.empty ()) in
+    let work = ref (AD.join ps value_addrs) in
+    let collected = ref value_types in
     while not (AD.is_empty !work) do
       let next = ref empty in
       let do_one a =
-        let (x,y,_) = reachable_from_address (AD.singleton a) in
+        let (x,y,_) = reachable_from_value (get ~man man.local (AD.singleton a) None) in
         collected := TS.union !collected y;
         next := AD.union !next x
       in
@@ -1635,6 +1637,8 @@ struct
           Q.TS.top ()
         | Address a ->
           reachable_top_pointers_types man a
+        | (Struct _ | Union _ | Array _ | Blob _) as value ->
+          reachable_top_pointers_types man ~value (AD.empty ())
         | _ -> Q.TS.empty ()
       end
     | Q.EvalStr e -> begin
