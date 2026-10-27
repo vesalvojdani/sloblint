@@ -26,6 +26,10 @@ int main() {
   if (*l == 0x3ff8000000000000LL)
     __goblint_check(1); // reachable
 
+  float (*f)[4] = (float (*)[4])&a;
+  if ((*f)[1] == 1.9375f) // 0x3ff80000, the high half of 1.5
+    __goblint_check(1); // reachable
+
   __goblint_check(a[0] == 1.5);
   __goblint_check(a[1] == 1.5);
   return 0;
