@@ -29,7 +29,8 @@ sig
 
   (** [int_read_unknown addr ofs t v]: whether reading the lvalue [*p] with offset [ofs] at type [t], where [p] points to [addr],
       gives the top value of [t] instead of the value [v] found there cast to [t],
-      because [v] is an integer of another size whose bytes the read does not correspond to. *)
+      because [v] is an integer of another size whose bytes the read does not correspond to.
+      Then a refinement of the lvalue does not refine the integer stored at [addr]. *)
   val int_read_unknown: ValueDomain.Addr.t -> offset -> typ -> VD.t -> bool
 
   val refine_entire_var: bool
@@ -65,10 +66,21 @@ struct
       VD.meet old_val new_val
     with Lattice.Uncomparable -> old_val
 
+  (** Whether the lvalue [x] is read through a pointer at an integer type, and for some address [eval_lv] gives for it,
+      [int_read_unknown] holds for the value stored there: the bytes read are not a value of the integer stored there,
+      so a value of the type of [x] cannot be met with it or written into it. *)
+  let reads_other_int ~man st x =
+    match x with
+    | Mem _, off ->
+      let addrs = eval_lv ~man st x in
+      let t_x = Cilfacade.typeOfLval x in
+      not (AD.is_top addrs) && AD.exists (fun a -> int_read_unknown a off t_x (get ~man st (AD.singleton a) None)) addrs
+    | Var _, _ -> false
+
   let refine_lv_fallback man st lval value tv =
     if M.tracing then M.tracec "invariant" "Restricting %a with %a" d_lval lval VD.pretty value;
     let addr = eval_lv ~man st lval in
-    if (AD.is_top addr) then st
+    if (AD.is_top addr) || reads_other_int ~man st lval then st
     else
       let old_val = get ~man st addr None in (* None is ok here, we could try to get more precise, but this is ok (reading at unknown position in array) *)
       let t_lval = Cilfacade.typeOfLval lval in
@@ -98,6 +110,7 @@ struct
     let set' lval v st = set st (eval_lv ~man st lval) (Cilfacade.typeOfLval lval) ~lval_raw:lval v ~man in
     let default () =
       (* For accesses via pointers in complicated case, no refinement yet *)
+      if reads_other_int ~man st x then st else
       let old_val = eval_rv_lval_refine ~man st exp x in
       let old_val = map_oldval old_val (Cilfacade.typeOfLval x) in
       let v = apply_invariant ~old_val ~new_val:c' in
@@ -137,12 +150,11 @@ struct
                 let orig = PreValueDomain.Addr.Mval.add_offset base_mval original_offset in
                 let old_val = get_mval ~man st orig None in
                 let t_x = Cilfacade.typeOfLval x in
-                let old_val =
-                  if int_read_unknown base_a off t_x old_val then
-                    VD.top_value t_x
-                  else
-                    VD.cast ~kind:Internal t_x old_val (* needed as the type of this pointer may be different *) (* TODO: proper castkind *)
-                in
+                if int_read_unknown base_a off t_x old_val then
+                  (* The bytes read are not a value of the integer stored there, so nothing is refined. *)
+                  Some (D.join acc st)
+                else
+                let old_val = VD.cast ~kind:Internal t_x old_val in (* needed as the type of this pointer may be different *) (* TODO: proper castkind *)
                 (* this what I would originally have liked to do, but eval_rv_lval_refine uses queries and thus stale values *)
                 (* let old_val = eval_rv_lval_refine ~man st exp x in *)
                 let old_val = map_oldval old_val (Cilfacade.typeOfLval x) in
