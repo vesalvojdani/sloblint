@@ -81,8 +81,9 @@ _NB! This list is likely incomplete._
     Whether they return the null pointer when it is zero is set by the `sem.malloc.zero` option.
     Goblint declares the assumption as "Heap allocation does not fail: functions that allocate on the heap, such as malloc, calloc and realloc, return the null pointer only when the number of bytes requested is zero" at each call where that number may be nonzero and the result Goblint computes does not include the null pointer.
     The `memLeak` analysis follows the null pointer returned by an allocation on a path of its own exactly where the `base` analysis includes it in the result.
+    The `c2po` analysis records that the result of an allocation points into a block different from that of every other pointer only where the result Goblint computes for the allocation does not include the null pointer.
 
-    This affects the `base` and `memLeak` analyses.
+    This affects the `base`, `memLeak` and `c2po` analyses.
 
 
 [n1570]: https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf
