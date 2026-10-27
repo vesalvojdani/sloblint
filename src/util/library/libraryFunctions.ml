@@ -342,7 +342,7 @@ let posix_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("vsyslog", unknown [drop "priority" []; drop "format" [r]; drop "ap" [r_deep]]); (* TODO: what to do with a va_list type? is r_deep correct? *)
     ("freeaddrinfo", unknown [drop "res" [f_deep]]);
     ("getgid", unknown []);
-    ("pselect", unknown [drop "nfds" []; drop "readdfs" [r]; drop "writedfs" [r]; drop "exceptfds" [r]; drop "timeout" [r]; drop "sigmask" [r]]);
+    ("pselect", unknown [drop "nfds" []; drop "readdfs" [r; w]; drop "writedfs" [r; w]; drop "exceptfds" [r; w]; drop "timeout" [r]; drop "sigmask" [r]]);
     ("getnameinfo", unknown [drop "addr" [r_deep]; drop "addrlen" []; drop "host" [w]; drop "hostlen" []; drop "serv" [w]; drop "servlen" []; drop "flags" []]);
     ("strtok_r", unknown [drop "str" [r; w]; drop "delim" [r]; drop "saveptr" [r_deep; w_deep]]); (* deep accesses through saveptr if str is NULL: https://github.com/lattera/glibc/blob/895ef79e04a953cac1493863bcae29ad85657ee1/string/strtok_r.c#L31-L40 *)
     ("kill", unknown [drop "pid" []; drop "sig" []]);
