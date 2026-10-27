@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <goblint.h>
 
-int g;
+int g __attribute__((aligned(256)));
 
 int main(void) {
   // A pointer stored over two unsigned ints: each holds half of its bytes.
@@ -32,5 +32,17 @@ int main(void) {
   *(int **)whole = &g;
   int *r = (int *)whole[0];
   __goblint_check(r == &g);
+
+  // The lowest byte of &g is 0, since g is aligned to 256 bytes.
+  _Bool b[8];
+  *(int **)b = &g;
+  _Bool b0 = b[0];
+  if (b0 == 0) {
+    __goblint_check(1); // reachable
+  }
+  _Bool *bp = b;
+  if (bp[0] == 0) {
+    __goblint_check(1); // reachable
+  }
   return 0;
 }
