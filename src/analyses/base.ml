@@ -597,21 +597,6 @@ struct
    * Auxiliary functions for function calls
    **************************************************************************)
 
-  (* From a list of values, presumably arguments to a function, simply extract
-   * the pointer arguments. *)
-  let get_ptrs (vals: value list): address =
-    let f acc (x:value) = match x with
-      | Address adrs when AD.is_top adrs ->
-        M.info ~category:Unsound "Unknown address given as function argument"; acc
-      | Address adrs when AD.to_var_may adrs = [] -> acc
-      | Address adrs ->
-        let typ = AD.type_of adrs in
-        if isFunctionType typ then acc else AD.join adrs acc
-      | Top -> M.info ~category:Unsound "Unknown value type given as function argument"; acc
-      | _ -> acc
-    in
-    List.fold_left f (AD.empty ()) vals
-
   let rec reachable_from_value ask (value: value) (t: typ) (description: string)  =
     let empty = AD.empty () in
     if M.tracing then M.trace "reachability" "Checking value %a" VD.pretty value;
@@ -2214,8 +2199,13 @@ struct
     let pa = GobList.combine_short fundec.sformals vals in (* TODO: is it right to ignore missing formals/args? *)
     add_to_array_map fundec pa;
     let new_cpa = CPA.add_list pa st'.cpa in
-    (* List of reachable variables *)
-    let reachable = AD.to_var_may (reachable_vars ~man st (get_ptrs vals)) in
+    (* Variables reachable from the argument values, also through pointers stored in struct, union and array arguments.
+       [reachable_from_value] reports an unknown address among them, which is not followed. *)
+    let reachable =
+      let f acc v e = AD.join acc (reachable_from_value ask v (Cilfacade.typeOf e) (CilType.Exp.show e)) in
+      let args_ptrs = List.fold_left2 f (AD.empty ()) vals args in
+      AD.to_var_may (reachable_vars ~man st (AD.remove UnknownPtr args_ptrs))
+    in
     let reachable = List.filter (fun v -> CPA.mem v st.cpa) reachable in
     let new_cpa = CPA.add_list_fun reachable (fun v -> CPA.find v st.cpa) new_cpa in
 

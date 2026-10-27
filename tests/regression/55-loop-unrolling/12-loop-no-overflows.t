@@ -4,15 +4,26 @@ Now has NULL dereference warning there still.
   $ goblint --enable ana.int.interval_set 12-loop-no-overflows.c
   [Warning][Behavior > Undefined > NullPointerDereference][CWE-476] May dereference NULL pointer (12-loop-no-overflows.c:34:346-34:384)
   [Warning][Behavior > Undefined > NullPointerDereference][CWE-476] May dereference NULL pointer (12-loop-no-overflows.c:36:9-36:33)
-  [Info][Unsound] Unknown address given as function argument (12-loop-no-overflows.c:36:9-36:33)
+  [Info][Unsound] Unknown address in & msg->list has escaped. (12-loop-no-overflows.c:36:9-36:33)
+  [Warning][Imprecise][Program] Trying to read an index, but was not given an array ({
+                                                         next -> {&ldv_global_msg_list}
+                                                         prev -> {&ldv_global_msg_list}
+                                                       }) (12-loop-no-overflows.c:36:9-36:33)
+  [Info][Unsound] Unknown value in ldv_global_msg_list[-8].list could be an escaped pointer address! (12-loop-no-overflows.c:36:9-36:33)
   [Warning][Imprecise][Program] Trying to read an index, but was not given an array ({
                                                          next -> {&ldv_global_msg_list}
                                                          prev -> {&ldv_global_msg_list}
                                                        }) (12-loop-no-overflows.c:22:5-22:45)
-  [Info][Unsound] Unknown address given as function argument (12-loop-no-overflows.c:22:5-22:45)
+  [Info][Unsound] Unknown address in entry->prev has escaped. (12-loop-no-overflows.c:22:5-22:45)
+  [Info][Unsound] Unknown address in entry->next has escaped. (12-loop-no-overflows.c:22:5-22:45)
   [Warning][Behavior > Undefined > NullPointerDereference][CWE-476] May dereference NULL pointer (12-loop-no-overflows.c:17:5-17:22)
   [Warning][Behavior > Undefined > NullPointerDereference][CWE-476] May dereference NULL pointer (12-loop-no-overflows.c:18:5-18:22)
-  [Info][Unsound] Unknown address given as function argument (12-loop-no-overflows.c:37:9-37:26)
+  [Info][Unsound] Unknown address in msg has escaped. (12-loop-no-overflows.c:37:9-37:26)
+  [Warning][Imprecise][Program] Trying to read an index, but was not given an array ({
+                                                         next -> {&ldv_global_msg_list}
+                                                         prev -> {&ldv_global_msg_list}
+                                                       }) (12-loop-no-overflows.c:37:9-37:26)
+  [Info][Unsound] Unknown value in ldv_global_msg_list[-8] could be an escaped pointer address! (12-loop-no-overflows.c:37:9-37:26)
   [Warning][Behavior > Undefined > NullPointerDereference][CWE-476] May dereference NULL pointer (12-loop-no-overflows.c:26:5-26:20)
   [Warning][Behavior > Undefined > InvalidMemoryDeallocation][CWE-590] Points-to set for pointer msg->data in function free is top. Potentially invalid memory deallocation may occur (12-loop-no-overflows.c:26:5-26:20)
   [Warning][Behavior > Undefined > InvalidMemoryDeallocation][CWE-590] Points-to set for pointer (void *)msg in function free is top. Potentially invalid memory deallocation may occur (12-loop-no-overflows.c:27:5-27:14)
