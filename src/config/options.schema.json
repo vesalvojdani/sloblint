@@ -1669,7 +1669,7 @@
             "fail": {
               "title": "sem.malloc.fail",
               "description":
-                "Consider the case where malloc or calloc fails when called with an argument other than zero. For the case of zero, see `sem.malloc.zero`.",
+                "Consider the case where malloc, calloc or realloc fails when called with an argument other than zero. For the case of zero, see `sem.malloc.zero`. When disabled, the analysis assumes that heap allocation does not fail, and declares this assumption at each call that relies on it.",
               "type": "boolean",
               "default": false
             },

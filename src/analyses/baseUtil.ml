@@ -12,3 +12,33 @@ let is_always_unknown variable = variable.vstorage = Extern || Ciltools.is_volat
 
 let is_excluded_from_earlyglobs v = List.mem v.vname (get_string_list "exp.exclude_from_earlyglobs")
 let is_excluded_from_invalidation v =  List.mem v.vname (get_string_list "exp.exclude_from_invalidation")
+
+type alloc_result = { may_be_null: bool; may_be_pointer: bool }
+
+let alloc_result (loc: Q.AllocationLocation.t) (bytes: ValueDomain.ID.t) =
+  let zero_option, fail_option =
+    match loc with
+    | Heap -> "sem.malloc.zero", "sem.malloc.fail"
+    | Stack -> "sem.alloca.zero", "sem.alloca.fail"
+  in
+  (* Whether an allocation of zero bytes returns the null pointer, a valid pointer, or both cases need to be considered. *)
+  let alloc_zero_null, alloc_zero_pointer =
+    match get_string zero_option with
+    | "null" -> true, false
+    | "pointer" -> false, true
+    | "either" -> true, true
+    | _ -> assert false
+  in
+  let cmp_bytes_with_zero = ValueDomain.ID.equal_to Z.zero bytes in
+  let bytes_may_be_zero = cmp_bytes_with_zero <> `Neq in
+  let bytes_may_be_nonzero = cmp_bytes_with_zero <> `Eq in
+  let may_be_null = (bytes_may_be_nonzero && get_bool fail_option) || (bytes_may_be_zero && alloc_zero_null) in
+  let may_be_pointer = bytes_may_be_nonzero || alloc_zero_pointer in
+  (* Without sem.malloc.fail, the result leaves out the null pointer that a failing heap allocation of a nonzero size returns.
+     alloca does not return the null pointer when it fails, so sem.alloca.fail assumes nothing. *)
+  begin match loc with
+    | Heap when bytes_may_be_nonzero && not may_be_null ->
+      Assumptions.add "Heap allocation does not fail: functions that allocate on the heap, such as malloc, calloc and realloc, return the null pointer only when the number of bytes requested is zero"
+    | _ -> ()
+  end;
+  { may_be_null; may_be_pointer }

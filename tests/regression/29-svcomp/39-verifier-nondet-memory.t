@@ -4,6 +4,7 @@
   [Info][Imprecise] Invalidating expressions: (void *)(& s) (39-verifier-nondet-memory.c:23:3-23:42)
   [Warning][Assert] Assertion "s.f == 0" is unknown. (39-verifier-nondet-memory.c:24:3-24:28)
   [Warning][Assert] Assertion "s.g == 0" is unknown. (39-verifier-nondet-memory.c:25:3-25:28)
+  [Info][Assumption] Heap allocation does not fail: functions that allocate on the heap, such as malloc, calloc and realloc, return the null pointer only when the number of bytes requested is zero (39-verifier-nondet-memory.c:27:7-27:41)
   [Info][Imprecise] Invalidating expressions: (void *)values (39-verifier-nondet-memory.c:29:3-29:53)
   [Warning][Assert] Assertion "*(values + 0) == 0" is unknown. (39-verifier-nondet-memory.c:30:3-30:34)
   [Warning][Assert] Assertion "*(values + 1) == 0" is unknown. (39-verifier-nondet-memory.c:31:3-31:34)
@@ -16,3 +17,4 @@
     live: 22
     dead: 0
     total lines: 22
+  [Info][Assumption] Heap allocation does not fail: functions that allocate on the heap, such as malloc, calloc and realloc, return the null pointer only when the number of bytes requested is zero

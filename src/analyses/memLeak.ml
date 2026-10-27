@@ -195,14 +195,24 @@ struct
     let state = man.local in
     let desc = LibraryFunctions.find f in
     match desc.special arglist with
-    | Malloc _
-    | Calloc _
-    | Realloc _ ->
+    | Malloc size
+    | Calloc {size; _}
+    | Realloc {size; _} ->
       man.sideg () true;
       begin match man.ask (Queries.AllocVar Heap), lval with
         | `Lifted var, Some lval ->
-          man.split (ToppedVarInfoSet.add var state) [SplitBranch (Lval lval, true)];
-          if GobConfig.get_bool "sem.malloc.fail" then
+          (* Split into the paths where the result is the new memory and where it is the null pointer, as far as [BaseUtil.alloc_result] includes each.
+             [Base.special] assigns the result from [BaseUtil.alloc_result] for the same size, which Base evaluates to the value of [EvalValue] here.
+             A path for a result that Base does not include would be dead, and a dead split makes all paths after the call dead. *)
+          let bytes =
+            match man.ask (Queries.EvalValue size) with
+            | Queries.VD.Int i -> i
+            | _ -> ValueDomain.ID.top_of (Cilfacade.get_ikind_exp size)
+          in
+          let {BaseUtil.may_be_null; may_be_pointer} = BaseUtil.alloc_result Heap bytes in
+          if may_be_pointer then
+            man.split (ToppedVarInfoSet.add var state) [SplitBranch (Lval lval, true)];
+          if may_be_null then
             man.split state [SplitBranch (Lval lval, false)];
           raise Analyses.Deadcode
         | `Lifted var, None ->
