@@ -18,6 +18,11 @@ struct
   include Analyses.ValueContexts(D)
   module P = IdentityP (D)
 
+  module ThreadIdSet = SetDomain.Make (ThreadIdDomain.ThreadLifted)
+  module V = VarinfoV
+  (** For a local variable, the addresses of its parts that were uninitialized at an escape of the variable, and the threads in which those escapes happened. *)
+  module G = Lattice.Prod (D) (ThreadIdSet)
+
   type trans_in  = D.t
   type trans_out = D.t
   type transfer  = trans_in -> trans_out
@@ -87,14 +92,38 @@ struct
 
   let is_prefix_of m1 m2 = Option.is_some (Addr.Mval.prefix m1 m2)
 
+  (** Whether a thread in [tids] may be another thread than the current one, or another instance of it. *)
+  let may_be_other_thread (ask: Queries.ask) (tids: ThreadIdSet.t) : bool =
+    match ask.f Queries.CurrentThreadId with
+    | `Lifted current ->
+      ThreadIdSet.exists (function
+          | `Lifted tid -> not (ThreadId.Thread.equal current tid) || not (ThreadId.Thread.is_unique current)
+          | `Top -> true
+          | `Bot -> false
+        ) tids
+    | `Top -> not (ThreadIdSet.is_empty tids)
+    | `Bot -> false
+
+  (** [escaped_uninit man v] are the addresses of parts of the local [v] that another thread, or another instance of the current one,
+      made accessible to other threads while they were uninitialized.
+      The state of the current thread does not contain them when [v] is not its own local. *)
+  let escaped_uninit man (v: varinfo) : D.t =
+    if v.vglob || not v.vaddrof || not (ThreadFlag.has_ever_been_multi (Analyses.ask_of_man man)) then
+      D.empty ()
+    else
+      let (addrs, tids) = man.global v in
+      if may_be_other_thread (Analyses.ask_of_man man) tids then addrs else D.empty ()
+
   (* Does it contain non-initialized variables? *)
-  let is_expr_initd a (expr:exp) (st:D.t) : bool =
+  let is_expr_initd man (expr:exp) : bool =
+    let a = Analyses.ask_of_man man in
+    let st = man.local in
     let mvals = varoffs a expr in
     let will_mval_init (t:bool) mval =
       let f addr =
         GobOption.exists (is_prefix_of mval) (Addr.to_mval addr)
       in
-      if D.exists f st then (
+      if D.exists f st || D.exists f (escaped_uninit man (fst mval)) then (
         M.error ~category:M.Category.Behavior.Undefined.uninitialized ~tags:[CWE 457] "Uninitialized variable %a accessed." Addr.Mval.pretty mval;
         false
       )
@@ -234,11 +263,11 @@ struct
     Transfer functions
   *)
   let assign man (lval:lval) (rval:exp) : trans_out =
-    ignore (is_expr_initd (Analyses.ask_of_man man) rval man.local);
+    ignore (is_expr_initd man rval);
     init_lval (Analyses.ask_of_man man) lval man.local
 
   let branch man (exp:exp) (tv:bool) : trans_out =
-    ignore (is_expr_initd (Analyses.ask_of_man man) exp man.local);
+    ignore (is_expr_initd man exp);
     man.local
 
   let body man (f:fundec) : trans_out =
@@ -250,7 +279,7 @@ struct
       List.fold_right D.remove (to_addrs v) x in
     let nst = List.fold_left remove_var man.local (f.slocals @ f.sformals) in
     match exp with
-    | Some exp -> ignore (is_expr_initd (Analyses.ask_of_man man) exp man.local); nst
+    | Some exp -> ignore (is_expr_initd man exp); nst
     | _ -> nst
 
 
@@ -259,7 +288,7 @@ struct
     [man.local, nst]
 
   let combine_env man lval fexp f args fc au f_ask =
-    ignore (List.map (fun x -> is_expr_initd (Analyses.ask_of_man man) x man.local) args);
+    ignore (List.map (fun x -> is_expr_initd man x) args);
     let cal_st = remove_unreachable (Analyses.ask_of_man man) f args man.local in
     D.union au (D.diff man.local cal_st)
 
@@ -272,6 +301,23 @@ struct
   let special man (lval: lval option) (f:varinfo) (arglist:exp list) : D.t =
     match lval with
     | Some lv -> init_lval (Analyses.ask_of_man man) lv man.local
+    | _ -> man.local
+
+  (** At [Events.Escape], records the parts of the escaped locals that are uninitialized in the current thread,
+      since other threads can access them from then on. *)
+  let event man (e: Events.t) oman : D.t =
+    match e with
+    | Events.Escape escaped ->
+      let tids = ThreadIdSet.singleton (man.ask Queries.CurrentThreadId) in
+      if D.is_top man.local then
+        EscapeDomain.EscapedVars.iter (fun v -> man.sideg v (D.top (), tids)) escaped
+      else
+        D.iter (fun addr ->
+            match Addr.to_var addr with
+            | Some v when EscapeDomain.EscapedVars.mem v escaped -> man.sideg v (D.singleton addr, tids)
+            | _ -> ()
+          ) man.local;
+      man.local
     | _ -> man.local
 
   (*  let fork man (lval: lval option) (f : varinfo) (args : exp list) : (varinfo * D.t) list =
