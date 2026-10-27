@@ -685,13 +685,13 @@ let gcc_descs_list: (string * LibraryDesc.t) list = LibraryDsl.[
     ("__sync_synchronize", unknown (VarArgs (drop' [])));
     ("__sync_lock_test_and_set", unknown (drop "ptr" [r_atomic; w_atomic] :: drop "value" [] :: VarArgs (drop' [])));
     ("__sync_lock_release", unknown (drop "ptr" [r_atomic; w_atomic] :: VarArgs (drop' [])));
-    ("__builtin_va_copy", unknown [drop "dest" [w]; drop "src" [r]]);
+    ("__builtin_va_copy", special [__ "dest" [w]; __ "src" [r]] @@ fun dest src -> VaCopy { dest; src });
     ("alloca", special [__ "size" []] @@ fun size -> Alloca size);
     ("__builtin_alloca", special [__ "size" []] @@ fun size -> Alloca size);
     ("__builtin_vsnprintf", unknown [drop "str" [w]; drop "size" []; drop "format" [r]; drop "ap" [r_deep]]);
     ("__builtin___vsnprintf", unknown [drop "str" [w]; drop "size" []; drop "format" [r]; drop "ap" [r_deep]]); (* TODO: does this actually exist?! *)
-    ("__builtin_va_arg", unknown [drop "ap" [r_deep]; drop "T" []; drop "lhs" [w]]); (* cil: "__builtin_va_arg is special: in CIL, the left hand side is stored as the last argument" *)
-    ("__builtin_va_start", unknown [drop "ap" [r_deep]]); (* cil: "When we parse builtin_{va,stdarg}_start, we drop the second argument" *)
+    ("__builtin_va_arg", special [__ "ap" [r_deep]; __ "T" []; __ "lhs" [w]] @@ (fun ap t lhs -> match t with SizeOf typ -> VaArg { ap; typ; dest = lhs } | _ -> Unknown)); (* cil: "__builtin_va_arg is special: in CIL, the left hand side is stored as the last argument" *)
+    ("__builtin_va_start", special [__ "ap" [r_deep]] @@ fun ap -> VaStart { ap }); (* cil: "When we parse builtin_{va,stdarg}_start, we drop the second argument" *)
     ("__builtin_va_end", unknown [drop "ap" [r_deep]]);
     ("__builtin_va_arg_pack_len", unknown []);
   ]

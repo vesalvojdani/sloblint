@@ -154,6 +154,36 @@ struct
   (* hack for char a[] = {"foo"} or {'f','o','o', '\000'} *)
   let char_array : (lval, bytes) Hashtbl.t = Hashtbl.create 500
 
+  (** [varargs_varinfo i] is the variable that holds, in the state of a variadic function, the value of the [i]-th argument (from 0) its caller passed in place of ["..."].
+      [make_entry] binds these variables, [return] removes them, and [va_start] makes a [va_list] point to them. *)
+  let varargs_varinfo =
+    let table = Hashtbl.create 8 in
+    fun i ->
+      match Hashtbl.find_opt table i with
+      | Some v -> v
+      | None ->
+        let v = Cilfacade.create_var @@ makeVarinfo false ("VARARGS" ^ string_of_int i) voidType in
+        Hashtbl.replace table i v;
+        v
+
+  (** The variables [varargs_varinfo i] that are bound in [cpa]. *)
+  let bound_varargs cpa =
+    let rec collect i acc =
+      let v = varargs_varinfo i in
+      if CPA.mem v cpa then collect (i + 1) (v :: acc) else List.rev acc
+    in
+    collect 0 []
+
+  let is_variadic (fundec: fundec) =
+    match Cil.unrollType fundec.svar.vtype with
+    | TFun (_, _, true, _) -> true
+    | _ -> false
+
+  let is_va_list_type t =
+    match Cil.unrollType t with
+    | TBuiltin_va_list _ -> true
+    | _ -> false
+
   let init marshal =
     GobOption.iter ((:=) array_map) marshal;
     return_varstore := Cilfacade.create_var @@ makeVarinfo false "RETURN" voidType;
@@ -2104,7 +2134,8 @@ struct
       (* TODO: move into sync `Init *)
       Priv.enter_multithreaded ask (priv_getg man.global) (priv_sideg man.sideg) st
     | _ ->
-      let locals = List.filter (fun v -> not (WeakUpdates.mem v st.weak)) (fundec.sformals @ fundec.slocals) in
+      let varargs = if is_variadic fundec then bound_varargs st.cpa else [] in
+      let locals = List.filter (fun v -> not (WeakUpdates.mem v st.weak)) (fundec.sformals @ fundec.slocals @ varargs) in
       let nst_part = rem_many_partitioning (Queries.to_value_domain_ask ask) man.local locals in
       let nst: store = rem_many ask nst_part locals in
       Option.map_default (fun exp ->
@@ -2218,6 +2249,25 @@ struct
     let reachable = AD.to_var_may (reachable_vars ~man st (get_ptrs vals)) in
     let reachable = List.filter (fun v -> CPA.mem v st.cpa) reachable in
     let new_cpa = CPA.add_list_fun reachable (fun v -> CPA.find v st.cpa) new_cpa in
+    (* Bind the arguments passed in place of "..." to [varargs_varinfo].
+       Integer and floating-point values are converted to one kind each, so that the values of calls with different argument types can be joined.
+       If a caller's own variable is reachable from the arguments, the value is joined with it. *)
+    let new_cpa =
+      if is_variadic fundec then
+        let vararg_value: value -> value = function
+          | Int i when Cil.bytesSizeOfInt (ID.ikind i) <= Cil.bytesSizeOfInt ILongLong -> Int (ID.cast_to ~suppress_ovwarn:true ~kind:Internal ILongLong i)
+          | Int _ -> Int (ID.top_of ILongLong)
+          | Float f -> Float (FD.cast_to FLongDouble f)
+          | v -> v
+        in
+        List.fold_lefti (fun cpa i v ->
+            let x = varargs_varinfo i in
+            let v = vararg_value v in
+            CPA.add x (match CPA.find_opt x cpa with Some old -> VD.join old v | None -> v) cpa
+          ) new_cpa (List.drop (List.length fundec.sformals) vals)
+      else
+        new_cpa
+    in
 
     (* Projection to Precision of the Callee *)
     let p = PU.int_precision_from_fundec fundec in
@@ -2845,6 +2895,46 @@ struct
           let result:value = (Int (ID.starting IInt Z.zero)) in
           set ~man st (eval_lv ~man st x) (Cilfacade.typeOfLval x) result
         ) st lv
+    | VaStart { ap = Lval ap }, _ when is_va_list_type (Cilfacade.typeOfLval ap) ->
+      (* [ap] points to the arguments passed in place of "...", which [make_entry] bound to [varargs_varinfo]. *)
+      let value = match bound_varargs st.cpa with
+        | [] -> VD.top ()
+        | vs -> Address (AD.of_list (List.map (fun v -> Addr.of_var v) vs))
+      in
+      set ~man st (eval_lv ~man st ap) (Cilfacade.typeOfLval ap) value
+    | VaCopy { dest = Lval dest; src }, _ when is_va_list_type (Cilfacade.typeOfLval dest) && is_va_list_type (Cilfacade.typeOf src) ->
+      set ~man st (eval_lv ~man st dest) (Cilfacade.typeOfLval dest) (eval_rv ~man st src)
+    | VaArg { ap; typ; dest }, _ when is_va_list_type (Cilfacade.typeOf ap) ->
+      (* If [ap] points to [varargs_varinfo] variables, the result is the join of their values that have the kind of [typ].
+         Otherwise, or if no value has that kind, [*dest] is invalidated. *)
+      let vararg_values = match eval_rv ~man st ap with
+        | Address a when not (AD.is_empty a) ->
+          let bound = bound_varargs st.cpa in
+          AD.fold (fun addr acc ->
+              match acc, addr with
+              | Some acc, Addr (v, `NoOffset) when List.exists (CilType.Varinfo.equal v) bound ->
+                Some (CPA.find v st.cpa :: acc)
+              | _, _ -> None
+            ) a (Some [])
+        | _ -> None
+      in
+      let has_kind_of_typ (v: value) = match Cil.unrollType typ, v with
+        | (TInt _ | TEnum _ | TPtr _), (Int _ | Address _)
+        | TFloat _, Float _
+        | TComp _, (Struct _ | Union _)
+        | _, Top -> true
+        | _, _ -> false
+      in
+      begin match Option.map (List.filter has_kind_of_typ) vararg_values with
+        | Some (_ :: _ as vs) ->
+          Assumptions.add "va_arg reads one of the arguments passed in place of \"...\", at a type of the same kind (integer or pointer, floating-point, structure or union)";
+          let value = List.fold_left (fun acc v -> VD.join acc (VD.cast ~kind:Internal typ v)) (VD.bot ()) vs in
+          let dest_a, dest_typ = addr_type_of_exp dest in
+          set ~man st dest_a dest_typ (VD.cast ~kind:Internal dest_typ value)
+        | Some []
+        | None ->
+          invalidate_ret_lv (special_unknown_invalidate man f args)
+      end
     | _, _ ->
       let st =
         special_unknown_invalidate man f args
