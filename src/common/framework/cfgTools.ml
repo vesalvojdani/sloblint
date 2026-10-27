@@ -677,6 +677,55 @@ let dead_code_cfg ~path (module FileCfg: MyCFG.FileCfg) live =
     )
 
 
+(** The member of union [ci] that [Cil.makeZeroInit] initializes: the first member of greatest size, or [None] if [ci] has no members. *)
+let union_zero_init_field (ci: compinfo): fieldinfo option =
+  let size f = try bitsSizeOf f.ftype with SizeOfError _ -> 0 in
+  match ci.cfields with
+  | [] -> None
+  | f :: fs ->
+    let widest, _ = List.fold_left (fun (w, ws) f ->
+        let s = size f in
+        if s > ws then (f, s) else (w, ws)
+      ) (f, size f) fs
+    in
+    Some widest
+
+(** Does [Cil.makeZeroInit t] fail?
+    It fails on [__builtin_va_list], which has no constant of its own type, and on a union without members, and on a struct, union or array whose members or elements it initializes with one of those. *)
+let rec zero_init_fails (t: typ): bool =
+  match unrollType t with
+  | TBuiltin_va_list _ -> true
+  | TComp (ci, _) when ci.cstruct -> List.exists (fun f -> f.fname <> missingFieldName && zero_init_fails f.ftype) ci.cfields
+  | TComp (ci, _) ->
+    begin match union_zero_init_field ci with
+      | Some f -> zero_init_fails f.ftype
+      | None -> true
+    end
+  | TArray (bt, Some _, _) -> zero_init_fails bt
+  | _ -> false
+
+(** The initializer of a global of type [t] that has none in the program.
+    It is [Cil.makeZeroInit t], except that a [__builtin_va_list] and a union without members, on which [Cil.makeZeroInit] fails, are initialized to [MyCFG.unknown_exp], which the analyses evaluate to an unknown value. *)
+let rec zero_init (t: typ): init =
+  match unrollType t with
+  | t' when not (zero_init_fails t') -> makeZeroInit t
+  | TComp (ci, _) as t' when ci.cstruct ->
+    let inits = List.filter_map (fun f ->
+        if f.fname = missingFieldName then None else Some (Field (f, NoOffset), zero_init f.ftype)
+      ) ci.cfields
+    in
+    CompoundInit (t', inits)
+  | TComp (ci, _) as t' ->
+    begin match union_zero_init_field ci with
+      | Some f -> CompoundInit (t', [(Field (f, NoOffset), zero_init f.ftype)])
+      | None -> SingleInit MyCFG.unknown_exp
+    end
+  | TArray (bt, Some len, _) as t' ->
+    let initbt = zero_init bt in
+    CompoundInit (t', List.init (lenOfArray (Some len)) (fun i -> (Index (integer i, NoOffset), initbt)))
+  | _ ->
+    SingleInit MyCFG.unknown_exp
+
 let getGlobalInits (file: file) : edges  =
   (* runtime with fast_global_inits: List: 36.25s, Hashtbl: 0.56s *)
   let inits = Hashtbl.create 13 in
@@ -712,7 +761,7 @@ let getGlobalInits (file: file) : edges  =
     match glob with
     | GVar ({vtype=vtype; _} as v, init, loc) -> begin
         let init, is_zero = match init.init with
-          | None -> makeZeroInit vtype, true
+          | None -> zero_init vtype, true
           | Some x -> x, false
         in
         doInit (var v) loc init is_zero
