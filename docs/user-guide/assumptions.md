@@ -69,5 +69,15 @@ _NB! This list is likely incomplete._
 
     See [issue #1702](https://github.com/goblint/analyzer/issues/1702).
 
+5.  A write by a call through an unknown pointer changes no variable or heap memory of the program.
+
+    When a library function, or a function without definition, writes through an argument, and when a call assigns its result through a pointer, the `base` analysis invalidates the memory the pointer may point to.
+    If the pointer's address set contains the unknown pointer, it invalidates only the known addresses in the set and assumes that the write through the unknown pointer changes no variable or heap memory of the program.
+    Where an argument is written deeply (for a function without definition, and for library functions that write everything reachable from an argument), this covers everything reachable through the unknown pointer as well.
+    Goblint declares the assumption at each such call as "A call writes through an unknown pointer; assuming the write changes no variable or heap memory of the program".
+    For an argument written deeply, the call also prints "Unknown address in … has escaped".
+
+    This affects the `base` analysis.
+
 
 [n1570]: https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf

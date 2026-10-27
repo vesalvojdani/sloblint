@@ -2189,6 +2189,11 @@ struct
       else
         D.join acc acc'
     in
+    (* [set_addr] writes nothing to [UnknownPtr], although it may stand for
+       a variable or heap memory of the program, so declare that the write
+       through it is assumed to change none of them. *)
+    if List.exists (fun (a, _, _) -> Addr.equal a UnknownPtr) invalids' then
+      Assumptions.add "A call writes through an unknown pointer; assuming the write changes no variable or heap memory of the program";
     List.fold_left f st invalids'
 
 
