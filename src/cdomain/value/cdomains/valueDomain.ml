@@ -1362,6 +1362,9 @@ struct
         match addr with
         | Addr.UnknownPtr ->
           None
+        | Addr.Addr (vi, _) when Cilfacade.is_varargs_var vi ->
+          (* No C expression names the arguments of a variadic call that a va_list points to. *)
+          None
         | Addr.Addr (vi, offs) when Addr.Offs.is_definite offs ->
           (* Addr.Offs.is_definite implies to_cil doesn't contain Offset.any_index_exp. *)
           let offset = Addr.Offs.to_cil offs in

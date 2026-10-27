@@ -32,6 +32,7 @@ struct
     | ad when not (Queries.AD.is_top ad) ->
       let to_extra addr set =
         match addr with
+        | Queries.AD.Addr.Addr (v,_) when Cilfacade.is_varargs_var v -> set (* the program cannot take their address, so [has_escaped] is false for them *)
         | Queries.AD.Addr.Addr (v,_) -> D.add v set
         | _ -> set
       in

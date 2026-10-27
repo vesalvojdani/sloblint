@@ -90,6 +90,9 @@ type special =
   | Bounded of { exp: Cil.exp}  (** Used to check for bounds for termination analysis. *)
   | Rand
   | Once of { once_control: Cil.exp; init_routine: Cil.exp; }
+  | VaStart of { ap: Cil.exp; } (** [ap] is the [va_list] to initialize. *)
+  | VaArg of { ap: Cil.exp; typ: Cil.typ; dest: Cil.exp; } (** Reads the next argument of type [typ] from [ap] into [*dest]. *)
+  | VaCopy of { dest: Cil.exp; src: Cil.exp; } (** [dest] and [src] are [va_list]s. *)
   | Unknown (** Anything not belonging to other types. *) (* TODO: rename to Other? *)
 
 
