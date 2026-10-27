@@ -641,6 +641,34 @@ struct
     let@ () = GobRef.wrap AnalysisState.executing_speculative_computations true in
     reachable_from_value ask value t description
 
+  (** [array_of_element addr] removes array indices from the end of the offset of [addr]
+      for as long as the offset ends in an index into an array, giving the outermost array that [addr] is a (nested) element of.
+      Other addresses are returned unchanged.
+      A pointer to an array element can be used to access every element of that array,
+      and a pointer to the first element of a nested array, such as [(char * )&m] for [char m[2][2]],
+      which casting makes [&m[0][0]], can be used to access all of the outer array,
+      so this is the memory a callee may read or write through such a pointer. *)
+  let array_of_element (addr: Addr.t): Addr.t =
+    let rec ends_in_index: Offs.t -> bool = function
+      | `NoOffset -> false
+      | `Index (_, `NoOffset) -> true
+      | `Index (_, o)
+      | `Field (_, o) -> ends_in_index o
+    in
+    let rec strip ((v, o) as mval) =
+      if ends_in_index o then
+        let array_mval = (v, Offs.remove_offset o) in
+        if Cil.isArrayType (Addr.Mval.type_of array_mval) then
+          strip array_mval
+        else
+          mval
+      else
+        mval
+    in
+    match addr with
+    | Addr mval -> Addr (strip mval)
+    | _ -> addr
+
   (* Get the list of addresses accessible immediately from a given address, thus
    * all pointers within a structure should be considered, but we don't follow
    * pointers. We return a flattend representation, thus simply an address (set). *)
@@ -654,19 +682,20 @@ struct
   (* The code for getting the variables reachable from the list of parameters.
    * This section is very confusing, because I use the same construct, a set of
    * addresses, as both AD elements abstracting individual (ambiguous) addresses
-   * and the workset of visited addresses. *)
+   * and the workset of visited addresses.
+   * An address of an array element is replaced by the address of the whole array, see [array_of_element]. *)
   let reachable_vars ~man (st: store) (args: address): address =
     if M.tracing then M.traceli "reachability" "Checking reachable arguments from %a!" AD.pretty args;
     let empty = AD.empty () in
     (* We begin looking at the parameters: *)
-    let workset = ref args in
+    let workset = ref (AD.map array_of_element args) in
     (* And we keep a set of already visited variables *)
     let visited = ref empty in
     while not (AD.is_empty !workset) do
       visited := AD.union !visited !workset;
       (* ok, let's visit all the variables in the workset and collect the new variables *)
       let visit_and_collect var (acc: address): address =
-        AD.union (reachable_from_addr ~man st var) acc in
+        AD.union (AD.map array_of_element (reachable_from_addr ~man st var)) acc in
       let collected = AD.fold visit_and_collect !workset empty in
       (* And here we remove the already visited variables *)
       workset := AD.diff collected !visited
@@ -774,7 +803,7 @@ struct
     while not (AD.is_empty !work) do
       let next = ref empty in
       let do_one a =
-        let (x,y,_) = reachable_from_address (AD.singleton a) in
+        let (x,y,_) = reachable_from_address (AD.singleton (array_of_element a)) in
         collected := TS.union !collected y;
         next := AD.union !next x
       in
@@ -2156,7 +2185,11 @@ struct
       List.fold_left mpt (AD.empty ()) exps
     )
 
-  let invalidate ~(must: bool) ?(deep=true) ~man (st:store) (exps: exp list): store =
+  (** Invalidate what [exps] point to and, if [deep], everything reachable from it.
+      If [deep], an address of an array element always stands for the whole array, because [reachable_vars] replaces it (see [array_of_element]).
+      Otherwise it does so only if [whole_arrays], as for a function that may access memory through the pointer,
+      and without [whole_arrays] only the element is invalidated, as for the lvalue a call assigns its result to. *)
+  let invalidate ~(must: bool) ?(deep=true) ?(whole_arrays=false) ~man (st:store) (exps: exp list): store =
     if M.tracing && exps <> [] then M.tracel "invalidate" "Will invalidate expressions [%a]" (d_list ", " d_plainexp) exps;
     if exps <> [] then M.info ~category:Imprecise "Invalidating expressions: %a" (d_list ", " d_exp) exps;
     (* To invalidate a single address, we create a pair with its corresponding
@@ -2169,6 +2202,7 @@ struct
     in
     let invalids =
       let args = collect_invalidate ~deep ~man ~warn:true st exps in
+      let args = if whole_arrays then AD.map array_of_element args else args in
       let args = AD.elements args in (* split all address sets up because each address of different type (and with different current value) should get a different invalidated value *)
       List.map invalidate_addr args
     in
@@ -2312,7 +2346,7 @@ struct
     in
     (* TODO: what about escaped local variables? *)
     (* invalidate arguments and non-static globals for unknown functions *)
-    let st' = invalidate ~must:false ~deep:false ~man man.local shallow_addrs in
+    let st' = invalidate ~must:false ~deep:false ~whole_arrays:true ~man man.local shallow_addrs in
     invalidate ~must:false ~deep:true ~man st' deep_addrs
 
   let check_invalid_mem_dealloc man special_fn ptr =
