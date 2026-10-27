@@ -785,6 +785,19 @@ struct
     done;
     !collected
 
+  (** Whether a read at type [t] of the value [v] reinterprets the bytes of a floating-point value:
+      [v] is a [Float] and [t] is not its floating-point type.
+      [VD.cast] would instead convert the value, e.g. with [FD.to_int]. *)
+  let float_read_unknown t (v: value) = match v, Cil.unrollType t with
+    | Float f, TFloat (fkind, _) -> FD.get_fkind f <> fkind
+    | Float _, _ -> true
+    | _, _ -> false
+
+  (** [read_float_at t v] is [v] read at type [t]: the top value of [t] when [float_read_unknown t v], and [v] otherwise.
+      [VD.eval_offset] reads a union member in the same way. *)
+  let read_float_at t (v: value) =
+    if float_read_unknown t v then VD.top_value t else v
+
   (** Does casting a pointer to [it] and (back) to [t] have to give the original pointer?
 
       Implementation-defined by C11 6.3.2.3p5-6.
@@ -1060,15 +1073,6 @@ struct
       in
       (** Lookup value at base address [addr] with given offset [ofs]. *)
       let lookup_with_offs addr =
-        (* [read_float_at typ v] is [v] read at type [typ] when [v] may be a floating-point value:
-           a [Float] whose floating-point kind is [typ] is kept, and any other [Float] gives the top value of [typ],
-           since the read reinterprets the bytes of the value, whereas [VD.cast] would convert it, e.g. with [FD.to_int].
-           [VD.eval_offset] reads a union member in the same way. *)
-        let read_float_at typ (v: value) = match v, Cil.unrollType typ with
-          | Float f, TFloat (fkind, _) when FD.get_fkind f = fkind -> v
-          | Float _, _ -> VD.top_value typ
-          | _, _ -> v
-        in
         let v = (* abstract base value *)
           if cast_ok addr then
             read_float_at t (get_addr ~man ~top:(VD.top_value t) st addr (Some exp))  (* downcasts are safe *)
@@ -1939,6 +1943,7 @@ struct
     let get_mval ~man st mval exp = get_mval ~man st mval exp
     let get ~man st addrs exp = get ~man st addrs exp
     let set ~man st lval lval_type ?lval_raw value = set ~man ~invariant:true st lval lval_type ?lval_raw value
+    let float_read_unknown = float_read_unknown
 
     let refine_entire_var = true
     let map_oldval oldval _ = oldval
@@ -3083,6 +3088,7 @@ struct
           let get ~man st addrs exp = get ~man st addrs exp
           let get_mval ~man st mval exp = get_mval ~man st mval exp
           let set ~man st lval lval_type ?lval_raw value = set ~man ~invariant:false st lval lval_type ?lval_raw value (* TODO: should have invariant false? doesn't work with empty cpa then, because meets *)
+          let float_read_unknown = float_read_unknown
 
           let refine_entire_var = false
           let map_oldval oldval t_lval =
