@@ -2417,10 +2417,106 @@ struct
         invalidate ~must:true ~deep:false ~man st [Cil.mkAddrOrStartOf lv]
         ) st lv
     in
-    let addr_type_of_exp exp =
-      let lval = mkMem ~addr:(Cil.stripCasts exp) ~off:NoOffset in
-      let addr = eval_lv ~man man.local lval in
-      (addr, AD.type_of addr)
+    (* [mem_regions dest count] splits the memory that [count] bytes from the pointer [dest] cover into one region per address [a] that [dest] may point to:
+       - [`Exact (a', t)] if the bytes cover exactly the object [a'] of type [t], which is [a] itself
+         or an object that [a] is at the start of, through array index 0 or the first field of a struct;
+       - [`Elements (a', t)] if the bytes cover whole elements of the array [a'] of type [t] that [a] is an element of (see [array_of_element]), from [a] on;
+       - [`Partial (a', t)] otherwise: [a'] is that array, or [a] itself if it is not an array element, if the bytes stay inside it,
+         and the whole variable if [count] is not known or the bytes may extend past it;
+       - [`Untyped (a, t)] if [a] is not a variable address or has type [void],
+         or is the address of allocated memory (see [Q.IsAllocVar]) at offset zero or with a [count] of the size of its type [t].
+         For other addresses of allocated memory, the result is [`Partial] of the whole allocated memory. *)
+    let mem_regions dest count =
+      let dest_a = eval_lv ~man man.local (mkMem ~addr:(Cil.stripCasts dest) ~off:NoOffset) in
+      let count = Option.bind count (fun count -> ID.to_int (eval_int ~man man.local count)) in
+      let size_of typ = try Some (Z.of_int (Cilfacade.bytesSizeOf typ)) with Cil.SizeOfError _ -> None in
+      let has_count_size typ =
+        match count, size_of typ with
+        | Some n, Some size -> Z.equal n size
+        | _, _ -> false
+      in
+      let rec last_offset: Offs.t -> Offs.t = function
+        | `Index (_, `NoOffset)
+        | `Field (_, `NoOffset) as o -> o
+        | `Index (_, o)
+        | `Field (_, o) -> last_offset o
+        | `NoOffset -> `NoOffset
+      in
+      let rec exact_object ((v, o) as mval) =
+        if has_count_size (Addr.Mval.type_of mval) then
+          Some mval
+        else
+          match last_offset o with
+          | `NoOffset -> None
+          | last when Offs.cmp_zero_offset last = `MustZero ->
+            let outer_mval = (v, Offs.remove_offset o) in
+            begin match Cil.unrollType (Addr.Mval.type_of outer_mval) with
+              | TArray _ | TComp _ -> exact_object outer_mval
+              | _ -> None
+            end
+          | _ -> None
+      in
+      (* whether the bytes from [mval] on stay inside [outer_mval], which [mval] is inside of *)
+      let stays_inside mval outer_mval =
+        match count, size_of (Addr.Mval.type_of outer_mval), Addr.Mval.prefix outer_mval mval with
+        | Some n, Some size, Some offs ->
+          let start = Offs.to_index ~typ:(Addr.Mval.type_of outer_mval) offs in
+          begin match IdxDom.minimal start, IdxDom.maximal start with
+            | Some lo, Some hi -> Z.geq lo Z.zero && Z.leq (Z.add hi n) size
+            | _, _ -> false
+          end
+        | _, _, _ -> false
+      in
+      let whole_var v = (Addr.of_var v, v.vtype) in
+      let region (a: Addr.t) =
+        match a with
+        | Addr ((v, o) as mval) when man.ask (Q.IsAllocVar v) ->
+          if o = `NoOffset || has_count_size (Addr.Mval.type_of mval) then
+            `Untyped (a, Addr.type_of a)
+          else
+            `Partial (whole_var v)
+        | Addr ((v, _) as mval) when not (Cil.isVoidType (Addr.Mval.type_of mval)) ->
+          begin match exact_object mval with
+            | Some mval' -> `Exact (Addr.Addr mval', Addr.Mval.type_of mval')
+            | None ->
+              let array_mval = match array_of_element a with Addr m -> m | _ -> mval in
+              let array_typ = Addr.Mval.type_of array_mval in
+              if not (stays_inside mval array_mval) then
+                `Partial (whole_var v)
+              else
+                let whole_elements =
+                  match count, size_of (Addr.Mval.type_of mval) with
+                  | Some n, Some size -> not (Addr.Mval.equal mval array_mval) && Z.equal (Z.erem n size) Z.zero
+                  | _, _ -> false
+                in
+                if whole_elements then
+                  `Elements (Addr.Addr array_mval, array_typ)
+                else
+                  `Partial (Addr.Addr array_mval, array_typ)
+          end
+        | _ -> `Untyped (a, Addr.type_of a)
+      in
+      (dest_a, List.map region (AD.elements dest_a))
+    in
+    (* [write_regions dest_a regions value_of] sets each of [regions] (see [mem_regions]) to [value_of] it.
+       As in [set], the writes are strong if [dest_a] is a single address and are otherwise joined with [man.local]. *)
+    let write_regions dest_a regions value_of =
+      let write st' r =
+        let (`Exact (a, typ) | `Elements (a, typ) | `Partial (a, typ) | `Untyped (a, typ)) = r in
+        set ~man st' (AD.singleton a) typ (value_of r)
+      in
+      let st' = List.fold_left write man.local regions in
+      if AD.cardinal dest_a > 1 then D.join man.local st' else st'
+    in
+    (* [fill_value ~zero r] is the value of region [r] (see [mem_regions]) after the bytes are set to zero, if [zero], or to unknown bytes. *)
+    let fill_value ~zero = function
+      | `Exact (_, typ)
+      | `Untyped (_, typ) when zero -> VD.zero_init_value typ
+      | `Elements (a, typ) when zero -> VD.join (get ~man man.local (AD.singleton a) None) (VD.zero_init_value typ)
+      | `Exact (_, typ)
+      | `Untyped (_, typ)
+      | `Elements (_, typ)
+      | `Partial (_, typ) -> VD.top_value typ
     in
     let forks = forkfun man lv f args in
     if M.tracing then if not (List.is_empty forks) then M.tracel "spawn" "Base.special %s: spawning functions %a" f.vname (d_list "," CilType.Varinfo.pretty) (List.map BatTuple.Tuple4.second forks);
@@ -2442,19 +2538,43 @@ struct
           Option.default false ds_eq_n
         | _ -> false
       in
-      let dest_a, dest_typ = addr_type_of_exp dst in
       let src_lval = mkMem ~addr:(Cil.stripCasts src) ~off:NoOffset in
       let src_typ = eval_lv ~man man.local src_lval
                     |> AD.type_of in
+      let dest_a, dest_regions = mem_regions dst n in
+      let _, src_regions = mem_regions src n in
+      (* the value of the source if every address it may point to is an object of type [typ] that the [n] bytes cover exactly *)
+      let src_value typ =
+        let src_objects = List.filter_map (function
+            | `Exact (a, t) when typeSig t = typeSig typ -> Some a
+            | _ -> None
+          ) src_regions
+        in
+        if src_objects <> [] && List.compare_lengths src_objects src_regions = 0 then
+          Some (get ~man st (AD.of_list src_objects) None)
+        else
+          None
+      in
       (* when src and destination type coincide, take value from the source, otherwise use top *)
-      let value = if (typeSig dest_typ = typeSig src_typ) && dest_size_equal_n then
+      let src_cast_value dest_typ =
+        if typeSig dest_typ = typeSig src_typ then
           (* TODO: why cast if types coincide? *)
           let src_cast_lval = mkMem ~addr:(Cilfacade.mkCast ~kind:Internal ~e:src ~newt:(TPtr (dest_typ, []))) ~off:NoOffset in
           eval_rv ~man st (Lval src_cast_lval)
         else
           VD.top_value dest_typ
       in
-      set ~man st dest_a dest_typ value in
+      let value = function
+        | `Exact (_, typ) ->
+          (* [src_cast_value] is used when src points to allocated memory *)
+          Option.default_delayed (fun () -> src_cast_value typ) (src_value typ)
+        | `Elements (_, typ)
+        | `Partial (_, typ) ->
+          VD.top_value typ
+        | `Untyped (_, dest_typ) ->
+          if dest_size_equal_n then src_cast_value dest_typ else VD.top_value dest_typ
+      in
+      write_regions dest_a dest_regions value in
     (* for string functions *)
     let eval_n = function
       (* if only n characters of a given string are needed, evaluate expression n to an integer option *)
@@ -2577,24 +2697,20 @@ struct
     List.iter (fun arg -> eval_rv ~man st arg |> ignore) args;
     let st = match desc.special args, f.vname with
     | Memset { dest; ch; count; }, _ ->
-      (* TODO: check count *)
-      let eval_ch = eval_rv ~man st ch in
-      let dest_a, dest_typ = addr_type_of_exp dest in
-      let value =
-        match eval_ch with
-        | Int i when ID.equal_to Z.zero i = `Eq ->
-          VD.zero_init_value dest_typ
-        | _ ->
-          VD.top_value dest_typ
+      let zero =
+        match eval_rv ~man st ch with
+        | Int i -> ID.equal_to Z.zero i = `Eq
+        | _ -> false
       in
-      set ~man st dest_a dest_typ value
+      let dest_a, regions = mem_regions dest (Some count) in
+      write_regions dest_a regions (fill_value ~zero)
     | Bzero { dest; count; }, _ ->
-      (* TODO: share something with memset special case? *)
-      (* TODO: check count *)
-      let dest_a, dest_typ = addr_type_of_exp dest in
-      let value = VD.zero_init_value dest_typ in
-      set ~man st dest_a dest_typ value
-    | Memcpy { dest = dst; src; n; }, _ -> (* TODO: use n *)
+      let dest_a, regions = mem_regions dest (Some count) in
+      write_regions dest_a regions (fill_value ~zero:true)
+    | Memcpy { dest = dst; src; _ }, "memccpy" ->
+      (* memccpy stops copying after the first byte equal to its third argument, so the number of bytes it writes is not known. *)
+      memory_copying dst src None
+    | Memcpy { dest = dst; src; n; }, _ ->
       memory_copying dst src (Some n)
     | Strcpy { dest = dst; src; n }, _ -> string_manipulation dst src None false None (fun ar1 ar2 -> Array (CArrays.string_copy ar1 ar2 (eval_n n)))
     | Strcat { dest = dst; src; n }, _ -> string_manipulation dst src None false None (fun ar1 ar2 -> Array (CArrays.string_concat ar1 ar2 (eval_n n)))
