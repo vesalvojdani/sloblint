@@ -48,7 +48,9 @@ struct
     in
     offs_lt_zero offs, ptr_size_le_offs
 
+  (** Whether [exp] or one of its subexpressions has pointer type. *)
   let rec exp_contains_a_ptr (exp:exp) =
+    isPointerType (typeOf exp) ||
     match exp with
     | Const _
     | SizeOf _
@@ -69,18 +71,20 @@ struct
     | AddrOf lval
     | StartOf lval -> lval_contains_a_ptr lval
 
+  (** Whether [lval] has pointer type, dereferences a pointer, or has an index expression that contains a pointer.
+      An element of an array of pointers, such as [b[1]] for [char *b[2]], has pointer type although [b] does not. *)
   and lval_contains_a_ptr (lval:lval) =
     let (host, offset) = lval in
     let host_contains_a_ptr = function
-      | Var v -> isPointerType v.vtype
+      | Var _ -> false
       | Mem e -> exp_contains_a_ptr e
     in
     let rec offset_contains_a_ptr = function
       | NoOffset -> false
       | Index (e, o) -> exp_contains_a_ptr e || offset_contains_a_ptr o
-      | Field (f, o) -> isPointerType f.ftype || offset_contains_a_ptr o
+      | Field (_, o) -> offset_contains_a_ptr o
     in
-    host_contains_a_ptr host || offset_contains_a_ptr offset
+    isPointerType (typeOfLval lval) || host_contains_a_ptr host || offset_contains_a_ptr offset
 
   let get_addr_size man (addr: Queries.AD.elt) = (* TODO: deduplicate with base (this uses IsAllocVar) *)
     match addr with
