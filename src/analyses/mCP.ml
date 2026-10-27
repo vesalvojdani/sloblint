@@ -176,8 +176,12 @@ struct
       let nv = assoc_replace (n,d) pv in
       (* Do split-specific emits before general emits.
          [emits] and [do_emits] are in reverse order.
-         [emits'] is in normal order. *)
-      man.split (do_emits man (emits @ List.rev emits') nv false) []
+         [emits'] is in normal order.
+         A split whose emits raise [Deadcode], e.g., a [SplitBranch] whose branch is dead, is unreachable and dropped;
+         the other splits are still made. *)
+      match do_emits man (emits @ List.rev emits') nv false with
+      | d' -> man.split d' []
+      | exception Deadcode -> ()
     in
     iter (uncurry split_one) xs
 
