@@ -18,7 +18,8 @@ open Analyses
     + access to [s.f] can race with access to a prefix like [s], which writes an entire struct at once;
     + access to [s.f] can race with type-based access like [(struct S).f];
     + access to [(struct S).f] can race with type-based access to a suffix like [(int)].
-    + access to [(struct T).s.f] can race with type-based access like [(struct S)], which is a combination of the above.
+    + access to [(struct T).s.f] can race with type-based access like [(struct S)], which is a combination of the above;
+    + access to [u.a] can race with access to [u.b] and [u.b.g], and type-based access to their type suffixes, if [u] is a union, because the members of a union overlap.
 
     These are accounted for lazily (unlike in the past).
 
@@ -29,6 +30,10 @@ open Analyses
     and accessing corresponding offsets from corresponding root tries in the global invariant.
 
     Type suffix prefixes (for the combination of the two) are handled by passing type suffix accesses down when traversing the prefix trie.
+
+    Overlapping union members are handled by passing the accesses at and below a union member, and their type suffix accesses,
+    down to the members which come after it at the same trie node.
+    Thus, a race between two members of a union is reported at the later member in the trie.
 
     Race checking happens at each trie node with the above three access sets at hand using {!Access.group_may_race}.
     All necessary combinations between the four classes are handled, but unnecessary repeated work is carefully avoided.
@@ -271,28 +276,78 @@ struct
         | `Left g' -> (* accesses *)
           (* Logs.debug "WarnGlobal %a" Access.MemoRoot.pretty g'; *)
           let trie = G.access (man.global g) in
-          (** Distribute access to contained fields. *)
-          let rec distribute_inner offset (accs, children) ~prefix ~type_suffix_prefix =
+          (** Distribute access to contained fields.
+              Accesses in [union_type_suffix] are checked like those in [prefix], except at a node of whose type suffix accesses they are also part:
+              two type suffix accesses of a node are already checked against each other at their own type-based memos.
+              If [collect], return the accesses at the trie node and its descendants, and the type suffix accesses of these nodes;
+              otherwise return two empty sets. *)
+          let rec distribute_inner offset (accs, children) ~prefix ~type_suffix_prefix ~union_type_suffix ~collect =
             let accs =
               match accs with
               | `Lifted accs -> accs
               | `Bot -> Access.AS.empty ()
             in
             let type_suffix = find_type_suffix man (g', offset) in
-            if not (Access.AS.is_empty accs) || (not (Access.AS.is_empty prefix) && not (Access.AS.is_empty type_suffix)) then (
+            let prefix_check =
+              if Access.AS.is_empty union_type_suffix then
+                prefix
+              else
+                Access.AS.union prefix (Access.AS.diff union_type_suffix type_suffix)
+            in
+            if not (Access.AS.is_empty accs) || (not (Access.AS.is_empty prefix_check) && not (Access.AS.is_empty type_suffix)) then (
               let memo = (g', offset) in
               let mem_loc_str = GobPretty.sprint Access.Memo.pretty memo in
-              Timing.wrap ~args:[("memory location", `String mem_loc_str)] "race" (Access.warn_global ~safe ~vulnerable ~unsafe {node=accs; prefix; type_suffix; type_suffix_prefix}) memo
+              Timing.wrap ~args:[("memory location", `String mem_loc_str)] "race" (Access.warn_global ~safe ~vulnerable ~unsafe {node=accs; prefix=prefix_check; type_suffix; type_suffix_prefix}) memo
             );
 
-            (* Recurse to children. *)
+            (* Recurse to children.
+               Members of a union overlap, so a child which is a union member additionally gets
+               the accesses (as prefix) and the type suffix accesses (as type suffix prefix) collected from the union members before it.
+               Two type suffix accesses of different members are only checked against each other at the root of the union's own type-based trie,
+               where the type suffix accesses of the members before are passed in [union_type_suffix] instead. *)
             let prefix' = Access.AS.union prefix accs in
             let type_suffix_prefix' = Access.AS.union type_suffix_prefix type_suffix in
-            OffsetTrie.ChildMap.iter (fun child_key child_trie ->
-                distribute_inner (Offset.Unit.add_offset offset (OneOffset.to_offset child_key)) child_trie ~prefix:prefix' ~type_suffix_prefix:type_suffix_prefix'
-              ) children;
+            let is_type_root =
+              match g', offset with
+              | `Type _, `NoOffset -> true
+              | _, _ -> false
+            in
+            let (_, (descendants_accs, descendants_type_suffix)) = OffsetTrie.ChildMap.fold (fun child_key child_trie ((overlap_accs, overlap_type_suffix), (descendants_accs, descendants_type_suffix)) ->
+                let is_union_member =
+                  match child_key with
+                  | OneOffset.Field f -> not f.fcomp.cstruct
+                  | Index -> false
+                in
+                let (prefix'', type_suffix_prefix'', union_type_suffix'') =
+                  if not is_union_member then
+                    (prefix', type_suffix_prefix', union_type_suffix)
+                  else if is_type_root then
+                    (Access.AS.union prefix' overlap_accs, type_suffix_prefix', Access.AS.union union_type_suffix overlap_type_suffix)
+                  else
+                    (Access.AS.union prefix' overlap_accs, Access.AS.union type_suffix_prefix' overlap_type_suffix, union_type_suffix)
+                in
+                let (child_accs, child_type_suffix) = distribute_inner (Offset.Unit.add_offset offset (OneOffset.to_offset child_key)) child_trie ~prefix:prefix'' ~type_suffix_prefix:type_suffix_prefix'' ~union_type_suffix:union_type_suffix'' ~collect:(collect || is_union_member) in
+                let overlap' =
+                  if is_union_member then
+                    (Access.AS.union overlap_accs child_accs, Access.AS.union overlap_type_suffix child_type_suffix)
+                  else
+                    (overlap_accs, overlap_type_suffix)
+                in
+                let descendants' =
+                  if collect then
+                    (Access.AS.union descendants_accs child_accs, Access.AS.union descendants_type_suffix child_type_suffix)
+                  else
+                    (descendants_accs, descendants_type_suffix)
+                in
+                (overlap', descendants')
+              ) children ((Access.AS.empty (), Access.AS.empty ()), (Access.AS.empty (), Access.AS.empty ()))
+            in
+            if collect then
+              (Access.AS.union accs descendants_accs, Access.AS.union type_suffix descendants_type_suffix)
+            else
+              (Access.AS.empty (), Access.AS.empty ())
           in
-          distribute_inner `NoOffset trie ~prefix:(Access.AS.empty ()) ~type_suffix_prefix:(Access.AS.empty ())
+          ignore (distribute_inner `NoOffset trie ~prefix:(Access.AS.empty ()) ~type_suffix_prefix:(Access.AS.empty ()) ~union_type_suffix:(Access.AS.empty ()) ~collect:false)
         | `Right _ -> (* vars *)
           ()
       end
