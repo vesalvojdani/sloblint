@@ -44,7 +44,10 @@ struct
   let access_one_top ?(force=false) ?(deref=false) man (kind: AccessKind.t) reach exp =
     if M.tracing then M.traceli "access" "access_one_top %a (kind = %a, reach = %B, deref = %B)" CilType.Exp.pretty exp AccessKind.pretty kind reach deref;
     if force || !collect_local || !emit_single_threaded || ThreadFlag.has_ever_been_multi (Analyses.ask_of_man man) then (
-      if deref && Cil.isPointerType (Cilfacade.typeOf exp) then (* avoid dereferencing integers to unknown pointers, which cause many spurious type-based accesses *)
+      (* Dereference pointers and, for a deep access, structs and unions (such as a struct passed by value), which reach what the pointers stored in them reach.
+         Do not dereference integers to unknown pointers, which cause many spurious type-based accesses. *)
+      let derefable typ = Cil.isPointerType typ || (reach && Cilfacade.isStructOrUnionType typ) in
+      if deref && derefable (Cilfacade.typeOf exp) then
         do_access man kind reach exp;
       if M.tracing then M.tracei "access" "distribute_access_exp";
       Access.distribute_access_exp (do_access man Read false) exp;
