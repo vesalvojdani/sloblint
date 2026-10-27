@@ -200,15 +200,46 @@ struct
     in
     BaseUtil.alloca_may_be_empty bytes
 
-  (** [may_point_to_empty_alloca ask t] is whether the pointer term [t] may point to a block allocated by [alloca] that may have size zero, see [BaseUtil.is_alloca_block_may_be_empty]. *)
+  (** Whether the program may allocate a block of size zero with [alloca]:
+      [sem.alloca.zero] is not [null] and the program calls [alloca] with a size that is not a nonzero constant.
+      [alloca] cannot be called through a function pointer: compilers reject taking the address of [__builtin_alloca], and the C library defines no function [alloca]. *)
+  let program_may_alloca_empty = ref true
+
+  (** Sets [program_may_alloca_empty] from the calls in the program. *)
+  let init _ =
+    let calls_alloca_may_be_empty = ref false in
+    let visitor = object
+      inherit nopCilVisitor
+      method! vinst = function
+        | Call (_, Lval (Var f, NoOffset), args, _, _) ->
+          begin match (LibraryFunctions.find ~nowarn:true f).special args with
+            | Alloca size ->
+              begin match getInteger (constFold true size) with
+                | Some z when not (Z.equal z Z.zero) -> ()
+                | _ -> calls_alloca_may_be_empty := true
+              end
+            | _ -> ()
+            | exception LibraryDsl.Expected _ -> () (* The arguments do not match the function's description, so it is not alloca. *)
+          end;
+          SkipChildren
+        | _ -> SkipChildren
+    end
+    in
+    visitCilFileSameGlobals visitor !Cilfacade.current_file;
+    program_may_alloca_empty := GobConfig.get_string "sem.alloca.zero" <> "null" && !calls_alloca_may_be_empty
+
+  (** [may_point_to_empty_alloca ask t] is whether the pointer term [t] may point to a block allocated by [alloca] that may have size zero, see [BaseUtil.is_alloca_block_may_be_empty].
+      This includes a term whose target [MayPointTo] does not know, unless the program allocates no such block ([program_may_alloca_empty]). *)
   let may_point_to_empty_alloca (ask: Queries.ask) t =
+    !program_may_alloca_empty &&
     GoblintCil.isPointerType (T.type_of_term t) &&
     try
-      MayBeEqual.ask_may_point_to ask (T.to_cil t)
-      |> Queries.AD.exists (function
+      let ad = MayBeEqual.ask_may_point_to ask (T.to_cil t) in
+      Queries.AD.is_top ad || Queries.AD.exists (function
           | Addr (v, _) -> BaseUtil.is_alloca_block_may_be_empty ask v
-          | _ -> false)
-    with T.UnsupportedCilExpression _ -> false
+          | UnknownPtr -> true
+          | _ -> false) ad
+    with T.UnsupportedCilExpression _ -> true
 
   (** var_opt is the variable we assign to. It has type lval. v=malloc.*)
   let special ctx lval_opt v exprs =
