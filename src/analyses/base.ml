@@ -1537,11 +1537,18 @@ struct
         | Address a ->
           let default = `Lifted MutexAttrDomain.MutexKind.NonRec in
           Assumptions.add "Mutexes are non-recursive by default";
-          begin match get ~man ~top:(MutexAttr default) man.local a None with (* ~top corresponds to default NULL with assume_top *)
-            | MutexAttr a -> a
-            | Bot -> default (* corresponds to default NULL with assume_none *)
-            | _ -> MutexAttrDomain.top ()
-          end
+          (* A NULL attribute gives the default type. An attribute whose value the analysis does not know may set any type: one behind UnknownPtr or StrPtr, or one whose value is Bot, as heap memory written only through an unknown pointer is. *)
+          let of_addr: Addr.t -> MutexAttrDomain.t = function
+            | NullPtr -> default
+            | Addr _ as addr ->
+              begin match get ~man man.local (AD.singleton addr) None with
+                | MutexAttr x when not (MutexAttrDomain.is_bot x) -> x
+                | _ -> MutexAttrDomain.top ()
+              end
+            | UnknownPtr
+            | StrPtr _ -> MutexAttrDomain.top ()
+          in
+          AD.fold (fun addr acc -> MutexAttrDomain.join (of_addr addr) acc) a (MutexAttrDomain.bot ())
         | _ -> MutexAttrDomain.top ()
       end
     | Q.EvalLength e -> begin
