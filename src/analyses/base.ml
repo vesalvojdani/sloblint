@@ -383,7 +383,7 @@ struct
           IdxDom.neg (IdxDom.lift n)
         in
         Address (ad_concat_map (addToAddr n) p)
-      | Mod -> Int (IdxDom.top ()) (* we assume that address is actually casted to int first*)
+      | Mod -> Int (ID.top_of (Cilfacade.get_ikind t)) (* we assume that address is actually casted to int first*)
       | _ -> Address AD.top_ptr
     in
     (* The main function! *)
