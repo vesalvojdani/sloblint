@@ -273,12 +273,51 @@ let get_val_type e: acc_typ =
   get_type fb e
 
 
-(** Add access to {!Memo} after distributing. *)
-let add_one ~side memo: unit =
+(** Field which represents the memory location of field [f] in a {!Memo}.
+    In a structure, a maximal sequence of adjacent bit-fields of non-zero width is one memory location (C11 3.14),
+    so accesses to different bit-fields of the sequence may race.
+    A zero-width bit-field, a member which is not a bit-field and the end of the structure end a sequence.
+    A bit-field of non-zero width in a structure is represented by the first named bit-field of its sequence.
+    Any other field represents itself. *)
+let memory_location_field (f: fieldinfo): fieldinfo =
+  match f.fbitfield with
+  | Some width when width > 0 && f.fcomp.cstruct ->
+    (* [first] is the first named bit-field of the current sequence, if any. *)
+    let rec find first = function
+      | [] -> f (* unreachable: f is in f.fcomp.cfields *)
+      | g :: gs ->
+        begin match g.fbitfield with
+          | Some width when width > 0 ->
+            let first =
+              match first with
+              | None when g.fname <> missingFieldName -> Some g
+              | _ -> first
+            in
+            if CilType.Fieldinfo.equal g f then
+              Option.value first ~default:f
+            else
+              find first gs
+          | _ -> find None gs
+        end
+    in
+    find None f.fcomp.cfields
+  | _ -> f
+
+(** Replace every field in [o] with its {!memory_location_field}. *)
+let rec memory_location_offset (o: Offset.Unit.t): Offset.Unit.t =
+  match o with
+  | `NoOffset -> `NoOffset
+  | `Field (f, o') -> `Field (memory_location_field f, memory_location_offset o')
+  | `Index ((), o') -> `Index ((), memory_location_offset o')
+
+(** Add access to {!Memo} after distributing.
+    Whether the access is ignorable is decided by the field actually accessed,
+    then the access is added to the memory location of that field (see {!memory_location_field}). *)
+let add_one ~side ((root, o) as memo: Memo.t): unit =
   let ignorable = is_ignorable_memo memo in
   if M.tracing then M.trace "access" "add_one %a (ignorable = %B)" Memo.pretty memo ignorable;
   if not ignorable then
-    side memo
+    side (root, memory_location_offset o)
 
 (** Distribute empty access set for type-based access to variables and containing fields.
     Empty access sets are needed for prefix-type_suffix race checking. *)
