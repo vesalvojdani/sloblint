@@ -1060,16 +1060,26 @@ struct
       in
       (** Lookup value at base address [addr] with given offset [ofs]. *)
       let lookup_with_offs addr =
+        (* [read_float_at typ v] is [v] read at type [typ] when [v] may be a floating-point value:
+           a [Float] whose floating-point kind is [typ] is kept, and any other [Float] gives the top value of [typ],
+           since the read reinterprets the bytes of the value, whereas [VD.cast] would convert it, e.g. with [FD.to_int].
+           [VD.eval_offset] reads a union member in the same way. *)
+        let read_float_at typ (v: value) = match v, Cil.unrollType typ with
+          | Float f, TFloat (fkind, _) when FD.get_fkind f = fkind -> v
+          | Float _, _ -> VD.top_value typ
+          | _, _ -> v
+        in
         let v = (* abstract base value *)
           if cast_ok addr then
-            get_addr ~man ~top:(VD.top_value t) st addr (Some exp)  (* downcasts are safe *)
+            read_float_at t (get_addr ~man ~top:(VD.top_value t) st addr (Some exp))  (* downcasts are safe *)
           else
             VD.top () (* upcasts not! *)
         in
         let v' = VD.cast ~kind:Internal t v in (* cast to the expected type (the abstract type might be something other than t since we don't change addresses upon casts!) *) (* TODO: proper castkind *)
         if M.tracing then M.tracel "cast" "Ptr-Deref: cast %a to %a = %a!" VD.pretty v d_type t VD.pretty v';
         let v' = VD.eval_offset (Queries.to_value_domain_ask (Analyses.ask_of_man man)) v' (convert_offset ~man st ofs) (Some exp) None t in (* handle offset *)
-        v'
+        (* [VD.cast] keeps an array of floats read at an array type of other elements, and [VD.eval_offset] then returns one of its floats for an index. *)
+        read_float_at (Cilfacade.typeOfLval lv) v'
       in
       AD.fold (fun a acc -> VD.join acc (lookup_with_offs a)) p (VD.bot ())
 
