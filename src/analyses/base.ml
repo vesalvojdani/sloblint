@@ -2513,8 +2513,9 @@ struct
           set ~man st lv_a lv_typ (VD.top_value lv_typ)
     in
     (* Returns a tuple, the first is the address of the blob if one was allocated, the second is the returned address (may contain null pointer or be only null-pointer) *)
-    let alloc (loc: Q.AllocationLocation.t) size =
-      let {BaseUtil.may_be_null; may_be_pointer} = BaseUtil.alloc_result loc (eval_int ~man st size) in
+    let alloc ?count (loc: Q.AllocationLocation.t) size =
+      let count = Option.map (eval_int ~man st) count in
+      let {BaseUtil.may_be_null; may_be_pointer} = BaseUtil.alloc_result ?count loc (eval_int ~man st size) in
       if not may_be_pointer then
         (None, AD.null_ptr)
       else
@@ -2743,7 +2744,7 @@ struct
     | Calloc { count = n; size }, _ ->
       begin match lv with
         | Some lv -> (* array length is set to one, as num*size is done when turning into `Calloc *)
-          let (heap_var, addr) = alloc Queries.AllocationLocation.Heap size in
+          let (heap_var, addr) = alloc ~count:n Queries.AllocationLocation.Heap size in
           let sizeval = eval_int ~man st size in
           let countval = eval_int ~man st n in
           if ID.equal_to Z.one countval = `Eq then
