@@ -1058,20 +1058,26 @@ struct
         | NullPtr | UnknownPtr -> true (* TODO: are these sound? *)
         | _ -> false
       in
+      let int_kind t = match Cil.unrollType t with
+        | TInt (ik, _) -> Some ik
+        | TEnum (ei, _) -> Some ei.ekind
+        | _ -> None
+      in
       (** Whether a read at the integer type [t] from the integer [v] may cover bytes other than the lowest ones of [v],
           in which case casting [v] to [t], which keeps the lowest bytes of [v], is unsound.
           This is so whenever [t] is an integer type narrower than [v] and
           - [at_index] holds: the read is at an index that may count elements of another type than that of [v], so which bytes of [v] it selects is unknown; or
           - the target is not little-endian ([Cil.little_endian]), so that the lowest bytes of [v] are not at its start. *)
       let reads_inside_wider_int t ~at_index (v: value) =
-        let int_kind t = match Cil.unrollType t with
-          | TInt (ik, _) -> Some ik
-          | TEnum (ei, _) -> Some ei.ekind
-          | _ -> None
-        in
         match v, int_kind t with
         | Int i, Some t_ik ->
           Cil.bytesSizeOfInt t_ik < Cil.bytesSizeOfInt (ID.ikind i) && (at_index || not !Cil.little_endian)
+        | _, _ -> false
+      in
+      (** Whether [t] is an integer type of another size than the integer [v]. *)
+      let int_of_other_size t (v: value) =
+        match v, int_kind t with
+        | Int i, Some t_ik -> Cil.bytesSizeOfInt t_ik <> Cil.bytesSizeOfInt (ID.ikind i)
         | _, _ -> false
       in
       (** Whether the offset of [addr] ends in an [Index]: [addToAddr] adds to that index whatever the type of the pointer,
@@ -1090,7 +1096,9 @@ struct
       in
       (** Whether the offset [ofs] of the lvalue contains an [Index].
           Such an index is in elements of the array type of the lvalue,
-          whereas [VD.eval_offset] takes it in elements of the stored array, which [VD.cast] keeps when the two element types differ. *)
+          whereas [VD.eval_offset] takes it in elements of the stored array, which [VD.cast] keeps when the two element types differ.
+          So when [VD.eval_offset] returns an integer of another size than the type of the lvalue,
+          the index does not say which bytes of that integer, or of the elements after it, are read, whether the type of the lvalue is narrower or wider. *)
       let rec has_index: offset -> bool = function
         | Index _ -> true
         | Field (_, o) -> has_index o
@@ -1113,7 +1121,8 @@ struct
         if M.tracing then M.tracel "cast" "Ptr-Deref: cast %a to %a = %a!" VD.pretty v d_type t VD.pretty v';
         let v' = VD.eval_offset (Queries.to_value_domain_ask (Analyses.ask_of_man man)) v' (convert_offset ~man st ofs) (Some exp) None t in (* handle offset *)
         let lt = Cilfacade.typeOfLval lv in
-        if reads_inside_wider_int lt ~at_index:(has_index ofs) v' then
+        let at_index = has_index ofs in
+        if reads_inside_wider_int lt ~at_index v' || (at_index && int_of_other_size lt v') then
           VD.top_value lt
         else
           v'
