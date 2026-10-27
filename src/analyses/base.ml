@@ -454,6 +454,10 @@ struct
           else
             None
         in
+        (* Pointers to different addresses differ, except that the address of an empty alloca block may be the address of another object. *)
+        let must_differ () =
+          AD.is_bot (AD.meet p1 p2) && not (BaseUtil.may_equal_through_empty_alloca (Analyses.ask_of_man man) p1 p2)
+        in
         match op with
         (* TODO use ID.of_incl_list [0; 1] for all comparisons *)
         | MinusPP ->
@@ -486,9 +490,9 @@ struct
               Int (ID.top_of ik)
           end
         | Eq ->
-          Int (if AD.is_bot (AD.meet p1 p2) then ID.of_int ik Z.zero else match eq p1 p2 with Some x when x -> ID.of_int ik Z.one | _ -> bool_top ik)
+          Int (if must_differ () then ID.of_int ik Z.zero else match eq p1 p2 with Some x when x -> ID.of_int ik Z.one | _ -> bool_top ik)
         | Ne ->
-          Int (if AD.is_bot (AD.meet p1 p2) then ID.of_int ik Z.one else match eq p1 p2 with Some x when x -> ID.of_int ik Z.zero | _ -> bool_top ik)
+          Int (if must_differ () then ID.of_int ik Z.one else match eq p1 p2 with Some x when x -> ID.of_int ik Z.zero | _ -> bool_top ik)
         | IndexPI when AD.to_string p2 = ["all_index"] ->
           addToAddrOp p1 (IdxDom.top ())
         | IndexPI | PlusPI ->
