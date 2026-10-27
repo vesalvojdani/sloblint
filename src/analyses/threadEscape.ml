@@ -55,6 +55,39 @@ struct
       if M.tracing then M.tracel "escape" "mpt %a: %a" d_exp e AD.pretty ad;
       D.empty ()
 
+  (** Whether [value] may hold an address other than the null pointer, as Base
+      keeps it: an unknown value may, an array is read at an unknown index, and an
+      integer holds none. *)
+  let rec may_hold_address (ask: Queries.ask) (value: Queries.VD.t): bool =
+    match value with
+    | Top -> true
+    | Address a -> not (AD.is_empty (AD.remove NullPtr a))
+    | Struct s -> ValueDomain.Structs.fold (fun _ v acc -> acc || may_hold_address ask v) s false
+    | Union (_, v) -> may_hold_address ask v
+    | Array a -> may_hold_address ask (ValueDomain.CArrays.get (Queries.to_value_domain_ask ask) a (None, ValueDomain.IndexDomain.top ()))
+    | Blob (v, _, _) -> may_hold_address ask v
+    | Int _ | Float _ | Thread _ | JmpBuf _ | Mutex | MutexAttr _ | Bot -> false
+
+  (** Variables that a copy of the memory [src] points to, as [memcpy] makes, may
+      make reachable from the destination: for each variable [src] may point to,
+      everything {!reachable} from the address of the whole variable, whichever
+      offset [src] points to and however many bytes are copied. That set contains
+      the variable itself whether or not its contents point back to it, so the
+      variable is left out only when nothing else is reachable from it and its
+      value holds no address ({!may_hold_address}). A function is left out: Base
+      keeps no value for it. *)
+  let reachable_by_copy (ask: Queries.ask) (src: exp): D.t =
+    D.fold (fun v acc ->
+        if Cil.isFunctionType v.vtype then
+          acc
+        else
+          let r = reachable ask (AddrOf (Var v, NoOffset)) in
+          if D.equal r (D.singleton v) && not (may_hold_address ask (ask.f (Queries.EvalValue (Lval (Var v, NoOffset))))) then
+            acc
+          else
+            D.join acc r
+      ) (mpt ask src) (D.empty ())
+
   let thread_id man =
     man.ask Queries.CurrentThreadId
 
@@ -122,8 +155,8 @@ struct
       end
     | _ -> Queries.Result.top q
 
-  let escape_rval man ask (rval:exp) =
-    let escaped = reachable ask rval in
+  (** Records the non-global variables of [escaped] as escaped. *)
+  let escape_vars man ask (escaped: D.t) =
     let escaped = D.filter (fun v -> not v.vglob) escaped in
 
     let thread_id = thread_id man in
@@ -131,6 +164,8 @@ struct
     if ThreadFlag.has_ever_been_multi ask then (* avoid emitting unnecessary event *)
       emit_escape_event man escaped;
     escaped
+
+  let escape_rval man ask (rval:exp) = escape_vars man ask (reachable ask rval)
 
   (* transfer functions *)
   let assign man (lval:lval) (rval:exp) : D.t =
@@ -161,6 +196,13 @@ struct
     | _, "pthread_setspecific" , [key; pt_value] ->
       let escaped = escape_rval man (Analyses.ask_of_man man) pt_value in
       D.join man.local escaped
+    | Memcpy { dest; src; _ }, _, _ ->
+      (* As [assign] of [*src] to [*dest]: when [dest] may point to a global or escaped variable, escapes what the copy may make reachable from it. *)
+      let ask = Analyses.ask_of_man man in
+      if D.exists (fun v -> v.vglob || has_escaped ask v) (mpt ask dest) then
+        D.join man.local (escape_vars man ask (reachable_by_copy ask src))
+      else
+        man.local
     | _ -> man.local
 
   let startstate v = D.bot ()
