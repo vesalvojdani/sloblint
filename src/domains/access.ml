@@ -273,35 +273,36 @@ let get_val_type e: acc_typ =
   get_type fb e
 
 
-(** Field which represents the memory location of field [f] in a {!Memo}.
+(** Fields which are in the same memory location as field [f], in declaration order.
     In a structure, a maximal sequence of adjacent bit-fields of non-zero width is one memory location (C11 3.14),
     so accesses to different bit-fields of the sequence may race.
     A zero-width bit-field, a member which is not a bit-field and the end of the structure end a sequence.
-    A bit-field of non-zero width in a structure is represented by the first named bit-field of its sequence.
-    Any other field represents itself. *)
-let memory_location_field (f: fieldinfo): fieldinfo =
+    For a bit-field of non-zero width in a structure, the result is its sequence, unnamed bit-fields included.
+    For any other field, the result is [[f]]. *)
+let memory_location_fields (f: fieldinfo): fieldinfo list =
   match f.fbitfield with
   | Some width when width > 0 && f.fcomp.cstruct ->
-    (* [first] is the first named bit-field of the current sequence, if any. *)
-    let rec find first = function
-      | [] -> f (* unreachable: f is in f.fcomp.cfields *)
+    let contains_f = List.exists (CilType.Fieldinfo.equal f) in
+    (* [sequence] is the current sequence so far, in reverse order. *)
+    let rec find sequence = function
+      | [] when contains_f sequence -> List.rev sequence
+      | [] -> [f] (* unreachable: f is in f.fcomp.cfields *)
       | g :: gs ->
         begin match g.fbitfield with
-          | Some width when width > 0 ->
-            let first =
-              match first with
-              | None when g.fname <> missingFieldName -> Some g
-              | _ -> first
-            in
-            if CilType.Fieldinfo.equal g f then
-              Option.value first ~default:f
-            else
-              find first gs
-          | _ -> find None gs
+          | Some width when width > 0 -> find (g :: sequence) gs
+          | _ when contains_f sequence -> List.rev sequence
+          | _ -> find [] gs
         end
     in
-    find None f.fcomp.cfields
-  | _ -> f
+    find [] f.fcomp.cfields
+  | _ -> [f]
+
+(** Field which represents the memory location of field [f] in a {!Memo}:
+    the first named field of {!memory_location_fields}. *)
+let memory_location_field (f: fieldinfo): fieldinfo =
+  match List.find_opt (fun g -> g.fname <> missingFieldName) (memory_location_fields f) with
+  | Some g -> g
+  | None -> f
 
 (** Replace every field in [o] with its {!memory_location_field}. *)
 let rec memory_location_offset (o: Offset.Unit.t): Offset.Unit.t =
