@@ -191,6 +191,28 @@ struct
     if M.tracing then M.trace "c2po-function" "return: exp_opt: %a; state: %a; result: %a" (Pretty.docOpt (d_exp ())) exp_opt D.pretty ctx.local D.pretty res;
     res
 
+  (** [alloc_may_return_null ask special] is whether the allocation [special] ([Malloc], [Calloc] or [Alloca]) may return the null pointer, as [BaseUtil.alloc_result] says for the number of bytes it requests.
+      [calloc] requests zero bytes when its [count] or its [size] is zero, and a nonzero number of bytes otherwise. *)
+  let alloc_may_return_null (ask: Queries.ask) (special: LibraryDesc.special) =
+    let eval e =
+      match ask.f (Queries.EvalValue e) with
+      | Queries.VD.Int i -> i
+      | _ -> ValueDomain.ID.top_of (Cilfacade.get_ikind_exp e)
+    in
+    match special with
+    | Malloc size -> (BaseUtil.alloc_result Heap (eval size)).may_be_null
+    | Alloca size -> (BaseUtil.alloc_result Stack (eval size)).may_be_null
+    | Calloc {count; size} ->
+      let ik = Cilfacade.get_ikind_exp size in
+      let bytes =
+        match ValueDomain.ID.equal_to Z.zero (eval count), ValueDomain.ID.equal_to Z.zero (eval size) with
+        | `Eq, _ | _, `Eq -> ValueDomain.ID.of_int ik Z.zero
+        | `Neq, `Neq -> ValueDomain.ID.of_int ik Z.one (* alloc_result only distinguishes zero bytes from a nonzero number of bytes. *)
+        | _ -> ValueDomain.ID.top_of ik
+      in
+      (BaseUtil.alloc_result Heap bytes).may_be_null
+    | _ -> true
+
   (** var_opt is the variable we assign to. It has type lval. v=malloc.*)
   let special ctx lval_opt v exprs =
     let desc = LibraryFunctions.find v in
@@ -210,9 +232,13 @@ struct
               let lterm = T.of_lval ask lval in
               let cc = D.remove_may_equal_terms ask size lterm d.data in
               let cc = begin match desc.special exprs with
+                (* add_block_diseqs states that lterm points into a block different from the block of every other term.
+                   This does not hold when lterm and another term are both the null pointer,
+                   so they are added only when the allocation cannot return the null pointer.
+                   No Realloc because it may return the same pointer. *)
                 | Malloc _
                 | Calloc _
-                | Alloca _ -> (* No Realloc because it may return the same pointer. *)
+                | Alloca _ as special when not (alloc_may_return_null ask special) ->
                   add_block_diseqs cc lterm
                 | _ -> cc
               end
