@@ -79,6 +79,7 @@ _NB! This list is likely incomplete._
 
     Unless the `sem.malloc.fail` option is enabled, Goblint does not consider that these functions, or other functions it models as allocating on the heap (such as `kmalloc`), return the null pointer when the number of bytes requested is nonzero.
     Whether they return the null pointer when it is zero is set by the `sem.malloc.zero` option.
+    For `calloc`, the number of bytes requested is the number of elements times the size of each, which is zero when either of them is zero.
     Goblint declares the assumption as "Heap allocation does not fail: functions that allocate on the heap, such as malloc, calloc and realloc, return the null pointer only when the number of bytes requested is zero" at each call where that number may be nonzero and the result Goblint computes does not include the null pointer.
     The `memLeak` analysis follows the null pointer returned by an allocation on a path of its own exactly where the `base` analysis includes it in the result.
 

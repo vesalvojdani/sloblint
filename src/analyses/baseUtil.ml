@@ -15,7 +15,7 @@ let is_excluded_from_invalidation v =  List.mem v.vname (get_string_list "exp.ex
 
 type alloc_result = { may_be_null: bool; may_be_pointer: bool }
 
-let alloc_result (loc: Q.AllocationLocation.t) (bytes: ValueDomain.ID.t) =
+let alloc_result ?count (loc: Q.AllocationLocation.t) (size: ValueDomain.ID.t) =
   let zero_option, fail_option =
     match loc with
     | Heap -> "sem.malloc.zero", "sem.malloc.fail"
@@ -29,9 +29,11 @@ let alloc_result (loc: Q.AllocationLocation.t) (bytes: ValueDomain.ID.t) =
     | "either" -> true, true
     | _ -> assert false
   in
-  let cmp_bytes_with_zero = ValueDomain.ID.equal_to Z.zero bytes in
-  let bytes_may_be_zero = cmp_bytes_with_zero <> `Neq in
-  let bytes_may_be_nonzero = cmp_bytes_with_zero <> `Eq in
+  (* The number of bytes requested is [size], or [count * size] with [count] (calloc).
+     The product is zero exactly when [count] or [size] is zero: calloc does not wrap around a product that does not fit in size_t, but fails, which is the case of [fail_option]. *)
+  let cmps_with_zero = List.map (ValueDomain.ID.equal_to Z.zero) (size :: Option.to_list count) in
+  let bytes_may_be_zero = List.exists (fun cmp -> cmp <> `Neq) cmps_with_zero in
+  let bytes_may_be_nonzero = List.for_all (fun cmp -> cmp <> `Eq) cmps_with_zero in
   let may_be_null = (bytes_may_be_nonzero && get_bool fail_option) || (bytes_may_be_zero && alloc_zero_null) in
   let may_be_pointer = bytes_may_be_nonzero || alloc_zero_pointer in
   (* Without sem.malloc.fail, the result leaves out the null pointer that a failing heap allocation of a nonzero size returns.

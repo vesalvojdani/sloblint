@@ -195,21 +195,28 @@ struct
     let state = man.local in
     let desc = LibraryFunctions.find f in
     match desc.special arglist with
-    | Malloc size
-    | Calloc {size; _}
-    | Realloc {size; _} ->
+    | Malloc _
+    | Calloc _
+    | Realloc _ as special ->
       man.sideg () true;
       begin match man.ask (Queries.AllocVar Heap), lval with
         | `Lifted var, Some lval ->
           (* Split into the paths where the result is the new memory and where it is the null pointer, as far as [BaseUtil.alloc_result] includes each.
-             [Base.special] assigns the result from [BaseUtil.alloc_result] for the same size, which Base evaluates to the value of [EvalValue] here.
+             [Base.special] assigns the result from [BaseUtil.alloc_result] for the same count and size, which Base evaluates to the values of [EvalValue] here.
              A path for a result that Base does not include would be dead, and a dead split makes all paths after the call dead. *)
-          let bytes =
-            match man.ask (Queries.EvalValue size) with
+          let eval e =
+            match man.ask (Queries.EvalValue e) with
             | Queries.VD.Int i -> i
-            | _ -> ValueDomain.ID.top_of (Cilfacade.get_ikind_exp size)
+            | _ -> ValueDomain.ID.top_of (Cilfacade.get_ikind_exp e)
           in
-          let {BaseUtil.may_be_null; may_be_pointer} = BaseUtil.alloc_result Heap bytes in
+          let count, size =
+            match special with
+            | Calloc {count; size} -> Some (eval count), eval size
+            | Malloc size
+            | Realloc {size; _} -> None, eval size
+            | _ -> assert false
+          in
+          let {BaseUtil.may_be_null; may_be_pointer} = BaseUtil.alloc_result ?count Heap size in
           if may_be_pointer then
             man.split (ToppedVarInfoSet.add var state) [SplitBranch (Lval lval, true)];
           if may_be_null then
