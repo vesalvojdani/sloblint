@@ -27,6 +27,11 @@ sig
   val get: man:(D.t, G.t, _, V.t) Analyses.man -> D.t -> AD.t -> exp option -> VD.t
   val set: man:(D.t, G.t, _, V.t) Analyses.man -> D.t -> AD.t -> typ -> ?lval_raw:lval -> VD.t -> D.t
 
+  (** [int_read_unknown addr ofs t v]: whether reading the lvalue [*p] with offset [ofs] at type [t], where [p] points to [addr],
+      gives the top value of [t] instead of the value [v] found there cast to [t],
+      because [v] is an integer of another size whose bytes the read does not correspond to. *)
+  val int_read_unknown: ValueDomain.Addr.t -> offset -> typ -> VD.t -> bool
+
   val refine_entire_var: bool
   val map_oldval: VD.t -> typ -> VD.t
   val eval_rv_lval_refine: man:(D.t, G.t, _, V.t) Analyses.man -> D.t -> exp -> lval -> VD.t
@@ -131,7 +136,13 @@ struct
                 let st = set' lv lval_a st in
                 let orig = PreValueDomain.Addr.Mval.add_offset base_mval original_offset in
                 let old_val = get_mval ~man st orig None in
-                let old_val = VD.cast ~kind:Internal (Cilfacade.typeOfLval x) old_val in (* needed as the type of this pointer may be different *) (* TODO: proper castkind *)
+                let t_x = Cilfacade.typeOfLval x in
+                let old_val =
+                  if int_read_unknown base_a off t_x old_val then
+                    VD.top_value t_x
+                  else
+                    VD.cast ~kind:Internal t_x old_val (* needed as the type of this pointer may be different *) (* TODO: proper castkind *)
+                in
                 (* this what I would originally have liked to do, but eval_rv_lval_refine uses queries and thus stale values *)
                 (* let old_val = eval_rv_lval_refine ~man st exp x in *)
                 let old_val = map_oldval old_val (Cilfacade.typeOfLval x) in
