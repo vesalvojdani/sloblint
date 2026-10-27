@@ -1,4 +1,5 @@
   $ goblint --set ana.activated[+] mallocFresh --set ana.activated[-] mhp --set ana.thread.domain plain 51-fresh-global.c 2>&1 | sed -r 's/sid:[0-9]+/sid:$SID/' | tee default-output.txt
+  [Info][Assumption] Heap allocation does not fail: functions that allocate on the heap, such as malloc, calloc and realloc, return the null pointer only when the number of bytes requested is zero (51-fresh-global.c:25:7-25:31)
   [Info][Deadcode] Logical lines of code (LLoC) summary:
     live: 15
     dead: 0
@@ -11,11 +12,12 @@
     vulnerable: 0
     unsafe: 1
     total memory locations: 2
+  [Info][Assumption] Heap allocation does not fail: functions that allocate on the heap, such as malloc, calloc and realloc, return the null pointer only when the number of bytes requested is zero
 
   $ goblint --set ana.activated[+] mallocFresh --set ana.activated[-] mhp --set ana.thread.domain plain --enable dbg.full-output 51-fresh-global.c 2>&1 | sed -r 's/sid:[0-9]+/sid:$SID/' > full-output.txt
 
   $ diff default-output.txt full-output.txt
-  5c5
+  6c6
   < [Warning][Race] Memory location (alloc@sid:$SID@tid:main) (race with conf. 110): (51-fresh-global.c:25:7-25:31)
   ---
   > [Warning][Race] Memory location (alloc@sid:$SID@tid:main(#top)) (race with conf. 110): (51-fresh-global.c:25:7-25:31)
