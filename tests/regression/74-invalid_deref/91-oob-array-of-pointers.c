@@ -39,6 +39,8 @@ int main() {
   pp[1][1][3] = 1; // NOWARN
   pp[1][1][5] = 1; // WARN
 
+  b[0][1] = 'a';
+  b[0][2] = 0;
   char *q[1];
   q[0] = b[0] + 1;
   size_t n = strlen(q[0]); // NOWARN
