@@ -1058,6 +1058,30 @@ struct
         | NullPtr | UnknownPtr -> true (* TODO: are these sound? *)
         | _ -> false
       in
+      (** Whether a read of type [t] at [addr] may cover bytes other than the lowest ones of the integer [v] that [get_addr] returns for [addr],
+          in which case casting [v] to [t], which keeps the lowest bytes of [v], is unsound.
+          This is so whenever [t] is an integer type narrower than [v] and
+          - the offset of [addr] ends in an [Index]: [addToAddr] adds to that index whatever the type of the pointer,
+            so neither its unit nor which byte of [v] it selects is known, and [get_addr] ignores it for a [Blob]; or
+          - the target is not little-endian ([Cil.little_endian]), so that the lowest bytes of [v] are not at its start.
+          An offset that is [`NoOffset] or ends in a [`Field] is the start of the stored integer. *)
+      let reads_inside_wider_int addr (v: value) =
+        let rec ends_in_index: Addr.Offs.t -> bool = function
+          | `Index (_, `NoOffset) -> true
+          | `Index (_, o)
+          | `Field (_, o) -> ends_in_index o
+          | `NoOffset -> false
+        in
+        let int_kind t = match Cil.unrollType t with
+          | TInt (ik, _) -> Some ik
+          | TEnum (ei, _) -> Some ei.ekind
+          | _ -> None
+        in
+        match addr, v, int_kind t with
+        | Addr.Addr (_, o), Int i, Some t_ik ->
+          Cil.bytesSizeOfInt t_ik < Cil.bytesSizeOfInt (ID.ikind i) && (ends_in_index o || not !Cil.little_endian)
+        | _, _, _ -> false
+      in
       (** Lookup value at base address [addr] with given offset [ofs]. *)
       let lookup_with_offs addr =
         let v = (* abstract base value *)
@@ -1066,7 +1090,12 @@ struct
           else
             VD.top () (* upcasts not! *)
         in
-        let v' = VD.cast ~kind:Internal t v in (* cast to the expected type (the abstract type might be something other than t since we don't change addresses upon casts!) *) (* TODO: proper castkind *)
+        let v' =
+          if reads_inside_wider_int addr v then
+            VD.top_value t
+          else
+            VD.cast ~kind:Internal t v (* cast to the expected type (the abstract type might be something other than t since we don't change addresses upon casts!) *) (* TODO: proper castkind *)
+        in
         if M.tracing then M.tracel "cast" "Ptr-Deref: cast %a to %a = %a!" VD.pretty v d_type t VD.pretty v';
         let v' = VD.eval_offset (Queries.to_value_domain_ask (Analyses.ask_of_man man)) v' (convert_offset ~man st ofs) (Some exp) None t in (* handle offset *)
         v'
