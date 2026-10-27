@@ -1019,7 +1019,15 @@ struct
 
   and eval_rv_base_lval ~eval_lv ~man (st: store) (exp: exp) (lv: lval): value =
     match lv with
-    | (Var v, ofs) -> get ~man st (eval_lv ~man st (Var v, ofs)) (Some exp)
+    | (Var v, ofs) ->
+      let t = Cilfacade.typeOfLval lv in
+      begin match get ~man st (eval_lv ~man st (Var v, ofs)) (Some exp) with
+        | Address _ as a when isIntegralType t && not (is_pointer_integer_roundtrip voidPtrType t) ->
+          (* Writing a pointer over integers narrower than a pointer (e.g. [p] assigned through [a] cast to [int **], for [unsigned a[2]]) stores the address as the value of an integer cell.
+             Such a cell holds only some of the pointer's bytes, so convert the address to [t], as [lookup_with_offs] does for a read through a pointer. *)
+          VD.cast ~kind:Internal t a (* TODO: proper castkind *)
+        | v -> v
+      end
     (* | Lval (Mem e, ofs) -> get ~man st (eval_lv ~man (Mem e, ofs)) *)
     | (Mem e, ofs) ->
       (*if M.tracing then M.tracel "cast" "Deref: lval: %a" d_plainlval lv;*)
