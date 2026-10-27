@@ -785,6 +785,19 @@ struct
     done;
     !collected
 
+  (** Whether a read at type [t] of the value [v] reinterprets the bytes of a floating-point value:
+      [v] is a [Float] and [t] is not its floating-point type.
+      [VD.cast] would instead convert the value, e.g. with [FD.to_int]. *)
+  let float_read_unknown t (v: value) = match v, Cil.unrollType t with
+    | Float f, TFloat (fkind, _) -> FD.get_fkind f <> fkind
+    | Float _, _ -> true
+    | _, _ -> false
+
+  (** [read_float_at t v] is [v] read at type [t]: the top value of [t] when [float_read_unknown t v], and [v] otherwise.
+      [VD.eval_offset] reads a union member in the same way. *)
+  let read_float_at t (v: value) =
+    if float_read_unknown t v then VD.top_value t else v
+
   (** Does casting a pointer to [it] and (back) to [t] have to give the original pointer?
 
       Implementation-defined by C11 6.3.2.3p5-6.
@@ -1062,14 +1075,15 @@ struct
       let lookup_with_offs addr =
         let v = (* abstract base value *)
           if cast_ok addr then
-            get_addr ~man ~top:(VD.top_value t) st addr (Some exp)  (* downcasts are safe *)
+            read_float_at t (get_addr ~man ~top:(VD.top_value t) st addr (Some exp))  (* downcasts are safe *)
           else
             VD.top () (* upcasts not! *)
         in
         let v' = VD.cast ~kind:Internal t v in (* cast to the expected type (the abstract type might be something other than t since we don't change addresses upon casts!) *) (* TODO: proper castkind *)
         if M.tracing then M.tracel "cast" "Ptr-Deref: cast %a to %a = %a!" VD.pretty v d_type t VD.pretty v';
         let v' = VD.eval_offset (Queries.to_value_domain_ask (Analyses.ask_of_man man)) v' (convert_offset ~man st ofs) (Some exp) None t in (* handle offset *)
-        v'
+        (* [VD.cast] keeps an array of floats read at an array type of other elements, and [VD.eval_offset] then returns one of its floats for an index. *)
+        read_float_at (Cilfacade.typeOfLval lv) v'
       in
       AD.fold (fun a acc -> VD.join acc (lookup_with_offs a)) p (VD.bot ())
 
@@ -1929,6 +1943,7 @@ struct
     let get_mval ~man st mval exp = get_mval ~man st mval exp
     let get ~man st addrs exp = get ~man st addrs exp
     let set ~man st lval lval_type ?lval_raw value = set ~man ~invariant:true st lval lval_type ?lval_raw value
+    let float_read_unknown = float_read_unknown
 
     let refine_entire_var = true
     let map_oldval oldval _ = oldval
@@ -3073,6 +3088,7 @@ struct
           let get ~man st addrs exp = get ~man st addrs exp
           let get_mval ~man st mval exp = get_mval ~man st mval exp
           let set ~man st lval lval_type ?lval_raw value = set ~man ~invariant:false st lval lval_type ?lval_raw value (* TODO: should have invariant false? doesn't work with empty cpa then, because meets *)
+          let float_read_unknown = float_read_unknown
 
           let refine_entire_var = false
           let map_oldval oldval t_lval =
