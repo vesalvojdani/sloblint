@@ -793,6 +793,18 @@ struct
     isPointerType t && isIntegralType it
     && (try bitsSizeOf it >= bitsSizeOf t with SizeOfError _ -> false)
 
+  (** Value of a read at integer type [t] narrower than a pointer from memory holding an address in [a],
+      e.g. [p] assigned through [a] cast to [int **], for [unsigned a[2]], and then [a[1]] read.
+      Such a read gets only some of the pointer's bytes, which are 0 for the null pointer and unknown for any other address.
+      This is not a conversion of the address to [t] (which gives 1 for [_Bool]) and cannot overflow.
+      Returns [None] if [t] is not such an integer type. *)
+  let read_address_bytes (t: typ) (a: AD.t): value option =
+    if isIntegralType t && not (is_pointer_integer_roundtrip voidPtrType t) then
+      let ik = Cilfacade.get_ikind t in
+      Some (Int (if AD.equal a AD.null_ptr then ID.of_int ik Z.zero else ID.top_of ik))
+    else
+      None
+
   (* The evaluation function as mutually recursive eval_lv & eval_rv *)
   let rec eval_rv ~(man: _ man) (st: store) (exp:exp): value =
     if M.tracing then M.traceli "evalint" "base eval_rv %a" d_exp exp;
@@ -1019,7 +1031,13 @@ struct
 
   and eval_rv_base_lval ~eval_lv ~man (st: store) (exp: exp) (lv: lval): value =
     match lv with
-    | (Var v, ofs) -> get ~man st (eval_lv ~man st (Var v, ofs)) (Some exp)
+    | (Var v, ofs) ->
+      begin match get ~man st (eval_lv ~man st (Var v, ofs)) (Some exp) with
+        | Address a as value ->
+          (* Writing a pointer over integers narrower than a pointer stores the address as the value of an integer cell. *)
+          Option.default value (read_address_bytes (Cilfacade.typeOfLval lv) a)
+        | value -> value
+      end
     (* | Lval (Mem e, ofs) -> get ~man st (eval_lv ~man (Mem e, ofs)) *)
     | (Mem e, ofs) ->
       (*if M.tracing then M.tracel "cast" "Deref: lval: %a" d_plainlval lv;*)
@@ -1066,7 +1084,10 @@ struct
           else
             VD.top () (* upcasts not! *)
         in
-        let v' = VD.cast ~kind:Internal t v in (* cast to the expected type (the abstract type might be something other than t since we don't change addresses upon casts!) *) (* TODO: proper castkind *)
+        let v' = match v with
+          | Address a -> Option.default_delayed (fun () -> VD.cast ~kind:Internal t v) (read_address_bytes t a) (* TODO: proper castkind *)
+          | _ -> VD.cast ~kind:Internal t v (* cast to the expected type (the abstract type might be something other than t since we don't change addresses upon casts!) *) (* TODO: proper castkind *)
+        in
         if M.tracing then M.tracel "cast" "Ptr-Deref: cast %a to %a = %a!" VD.pretty v d_type t VD.pretty v';
         let v' = VD.eval_offset (Queries.to_value_domain_ask (Analyses.ask_of_man man)) v' (convert_offset ~man st ofs) (Some exp) None t in (* handle offset *)
         v'
