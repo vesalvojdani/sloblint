@@ -1020,13 +1020,17 @@ struct
   and eval_rv_base_lval ~eval_lv ~man (st: store) (exp: exp) (lv: lval): value =
     match lv with
     | (Var v, ofs) ->
-      let t = Cilfacade.typeOfLval lv in
       begin match get ~man st (eval_lv ~man st (Var v, ofs)) (Some exp) with
-        | Address _ as a when isIntegralType t && not (is_pointer_integer_roundtrip voidPtrType t) ->
-          (* Writing a pointer over integers narrower than a pointer (e.g. [p] assigned through [a] cast to [int **], for [unsigned a[2]]) stores the address as the value of an integer cell.
-             Such a cell holds only some of the pointer's bytes, so convert the address to [t], as [lookup_with_offs] does for a read through a pointer. *)
-          VD.cast ~kind:Internal t a (* TODO: proper castkind *)
-        | v -> v
+        | Address a as value ->
+          let t = Cilfacade.typeOfLval lv in
+          if isIntegralType t && not (is_pointer_integer_roundtrip voidPtrType t) then
+            (* Writing a pointer over integers narrower than a pointer (e.g. [p] assigned through [a] cast to [int **], for [unsigned a[2]]) stores the address as the value of an integer cell.
+               Such a cell holds only some of the pointer's bytes, so convert the address to [t] as [lookup_with_offs] does for a read through a pointer: the null pointer gives 0, any other address an unknown value.
+               The program performs no conversion here, so a value outside [t]'s range is not an overflow and is not reported. *)
+            Int (ID.cast_to ~suppress_ovwarn:true ~kind:Internal (Cilfacade.get_ikind t) (AD.to_int a)) (* TODO: proper castkind *)
+          else
+            value
+        | value -> value
       end
     (* | Lval (Mem e, ofs) -> get ~man st (eval_lv ~man (Mem e, ofs)) *)
     | (Mem e, ofs) ->
