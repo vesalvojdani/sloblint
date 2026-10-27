@@ -1261,7 +1261,7 @@ struct
   (** Evaluate expression as address.
       Avoids expensive Apron EvalInt if the Int result would be useless to us anyway.
       An lvalue of integer type evaluates to the address set that its object holds, if it holds one,
-      as it does after a pointer is written through a cast of its address. *)
+      as it does after [memcpy] copies a pointer into it (see [copied_address]) or after a pointer is written through a cast of its address. *)
   let eval_rv_address ~man st e =
     (* no way to do eval_rv with expected type, so filter expression beforehand *)
     match Cilfacade.typeOf e with
@@ -2387,6 +2387,30 @@ struct
     |> Seq.map (get_addr_size man)
     |> Seq.fold_left SizeDomain.join (SizeDomain.bot ())
 
+  (** [copied_address ~man st ~dest_typ ~src_a ~src_typ n] is the value of an object of type [dest_typ]
+      after [memcpy] copies [n] bytes into it from the addresses [src_a] of type [src_typ],
+      when [dest_typ] and [src_typ] are integer or pointer types of [n] bytes
+      and the value of the source is an address set containing an [Addr].
+      The result is that address set, cast to [dest_typ] if it is a pointer type.
+      For an integer [dest_typ] it is not cast, as [set] keeps a pointer written through a cast of an integer object's address,
+      so that converting the integer back to a pointer gives the address and [reachable_from_value] follows it.
+      Otherwise the result is [None]. *)
+  let copied_address ~man st ~dest_typ ~src_a ~src_typ n =
+    let is_scalar_of_size_n typ =
+      (Cil.isIntegralType typ || Cil.isPointerType typ)
+      && match Queries.ID.to_int n, Cilfacade.bytesSizeOf typ with
+      | Some n, size -> Z.equal n (Z.of_int size)
+      | None, _ -> false
+      | exception Cil.SizeOfError _ -> false
+    in
+    if is_scalar_of_size_n dest_typ && is_scalar_of_size_n src_typ then
+      match get ~man st src_a None with
+      | Address a as v when AD.exists (function Addr.Addr _ -> true | _ -> false) a ->
+        Some (if Cil.isPointerType dest_typ then VD.cast ~kind:Internal dest_typ v else v)
+      | _ -> None
+    else
+      None
+
   let special man (lv:lval option) (f: varinfo) (args: exp list) =
     let invalidate_ret_lv st =
       Option.map_default (fun lv ->
@@ -2421,14 +2445,16 @@ struct
       in
       let dest_a, dest_typ = addr_type_of_exp dst in
       let src_lval = mkMem ~addr:(Cil.stripCasts src) ~off:NoOffset in
-      let src_typ = eval_lv ~man man.local src_lval
-                    |> AD.type_of in
-      (* when src and destination type coincide, take value from the source, otherwise use top *)
-      let value = if (typeSig dest_typ = typeSig src_typ) && dest_size_equal_n then
+      let src_a = eval_lv ~man man.local src_lval in
+      let src_typ = AD.type_of src_a in
+      (* keep a copied address (see [copied_address]), otherwise take the value from the source when src and destination type coincide, otherwise use top *)
+      let value = match copied_address ~man st ~dest_typ ~src_a ~src_typ n_intdom with
+        | Some v -> v
+        | None when (typeSig dest_typ = typeSig src_typ) && dest_size_equal_n ->
           (* TODO: why cast if types coincide? *)
           let src_cast_lval = mkMem ~addr:(Cilfacade.mkCast ~kind:Internal ~e:src ~newt:(TPtr (dest_typ, []))) ~off:NoOffset in
           eval_rv ~man st (Lval src_cast_lval)
-        else
+        | None ->
           VD.top_value dest_typ
       in
       set ~man st dest_a dest_typ value in
