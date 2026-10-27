@@ -42,9 +42,19 @@ void single(void) {
   __goblint_check(z == y);
 }
 
+// With the default ana.malloc.unique_address_count 0, the heap variable of this
+// malloc is multiple although it is executed once, so *a is not read relationally.
+void single_alloc(void) {
+  int *a = malloc(sizeof(int));
+  *a = rand();
+  int d = *a;
+  __goblint_check(d == *a); // TODO
+}
+
 int main(void) {
   alloc();
   f(2, 0);
   single();
+  single_alloc();
   return 0;
 }
