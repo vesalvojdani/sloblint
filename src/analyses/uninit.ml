@@ -191,7 +191,10 @@ struct
     | _ -> [Addr.of_var v]
 
 
-  let remove_unreachable (ask: Queries.ask) (args: exp list) (st: D.t) : D.t =
+  (** [remove_unreachable ask f args st] keeps the addresses in [st] that [f] called with [args] can access:
+      those reachable from [args], and those of locals for which [Queries.MayEscape] holds, which [f] can reach through globals,
+      except locals and formals of [f] itself. *)
+  let remove_unreachable (ask: Queries.ask) (f: fundec) (args: exp list) (st: D.t) : D.t =
     let reachable =
       let do_exp e a =
         match ask.f (Queries.ReachableFrom e) with
@@ -212,9 +215,20 @@ struct
       |> List.concat_map to_addrs
       |> AD.of_list
     in
+    (* [Queries.MayEscape] directly instead of {!ThreadEscape.has_escaped}:
+       the latter answers [false] for every local under [exp.single-threaded],
+       but a local stored into a global reaches the callee in single-threaded programs too.
+       Locals and formals of [f] itself are not kept: in a recursive call the caller's copy of such a variable
+       is another object than the callee's, but [return] removes the variable from the state of [f],
+       so [combine_env] would drop the caller's fact about its own copy. *)
+    let escaped x =
+      match Addr.to_var x with
+      | Some v -> v.vaddrof && not (GobOption.exists (CilType.Fundec.equal f) (Cilfacade.find_scope_fundec v)) && ask.f (Queries.MayEscape v)
+      | None -> false
+    in
     if D.is_top st
     then D.top ()
-    else D.filter (fun x -> AD.mem x vars) st
+    else D.filter (fun x -> AD.mem x vars || escaped x) st
 
   (*
     Transfer functions
@@ -241,12 +255,12 @@ struct
 
 
   let enter man (lval: lval option) (f:fundec) (args:exp list) : (D.t * D.t) list =
-    let nst = remove_unreachable (Analyses.ask_of_man man) args man.local in
+    let nst = remove_unreachable (Analyses.ask_of_man man) f args man.local in
     [man.local, nst]
 
   let combine_env man lval fexp f args fc au f_ask =
     ignore (List.map (fun x -> is_expr_initd (Analyses.ask_of_man man) x man.local) args);
-    let cal_st = remove_unreachable (Analyses.ask_of_man man) args man.local in
+    let cal_st = remove_unreachable (Analyses.ask_of_man man) f args man.local in
     D.union au (D.diff man.local cal_st)
 
   let combine_assign man (lval:lval option) fexp (f:fundec) (args:exp list) fc (au:D.t) (f_ask: Queries.ask) : trans_out =
