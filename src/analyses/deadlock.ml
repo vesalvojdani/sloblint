@@ -14,7 +14,13 @@ struct
 
   module Arg =
   struct
-    module D = MayLockEvents
+    (** Lock events of the locks that may be held, and the locks that may
+        have been held more than once since the thread started. *)
+    module D =
+    struct
+      include Lattice.Prod (MayLockEvents) (MayRelockedLocks)
+      let empty () = (MayLockEvents.empty (), MayRelockedLocks.empty ())
+    end
     module V =
     struct
       include Lock
@@ -30,19 +36,31 @@ struct
     let part_access man: MCPAccess.A.t =
       Obj.obj (man.ask (PartAccess Point))
 
-    let add man ((l, _): LockDomain.AddrRW.t) =
-      let after: LockEvent.t = (l, man.prev_node, part_access man) in (* use oman for access to use locksets before event *)
-      D.iter (fun before ->
-          side_lock_event_pair man before after
-        ) man.local;
-      D.add after man.local
+    (** Whether [l1] and [l2] may be the same mutex: true unless
+        [Lock.semantic_equal] reports them as different. *)
+    let may_equal l1 l2 = Option.default true (Lock.semantic_equal l1 l2)
 
-    (** Removes the lock events of [l] from the may-lockset if [l] is not the
-        address of a variable or [Queries.MutexType] reports it as
-        non-recursive. Otherwise the events are kept: a recursive mutex that
-        was locked more than once is still held after one unlock, and a mutex
-        of unknown type may be recursive. *)
+    let add man ((l, _): LockDomain.AddrRW.t) =
+      let (events, relocked) = man.local in
+      let after: LockEvent.t = (l, man.prev_node, part_access man) in (* use oman for access to use locksets before event *)
+      MayLockEvents.iter (fun before ->
+          side_lock_event_pair man before after
+        ) events;
+      let relocked =
+        if MayLockEvents.exists (fun (e, _, _) -> may_equal l e) events then
+          MayRelockedLocks.add l relocked
+        else
+          relocked
+      in
+      (MayLockEvents.add after events, relocked)
+
+    (** Removes the lock events of [l] from the may-lockset, unless [l] may be
+        a recursive mutex that may be held more than once: [l] is the address
+        of a variable, [Queries.MutexType] does not report it as non-recursive,
+        and a lock that may be the same mutex is in [MayRelockedLocks]. Such a
+        mutex may still be held after one unlock, so its events are kept. *)
     let remove man l =
+      let (events, relocked) = man.local in
       let may_be_recursive = match Lock.to_mval l with
         | Some (v, o) ->
           begin match man.ask (Queries.MutexType (v, Offset.Unit.of_offs o)) with
@@ -51,11 +69,11 @@ struct
           end
         | None -> false
       in
-      if may_be_recursive then
+      if may_be_recursive && MayRelockedLocks.exists (may_equal l) relocked then
         man.local
       else
         let inLockAddrs (e, _, _) = Lock.equal l e in
-        D.filter (neg inLockAddrs) man.local
+        (MayLockEvents.filter (neg inLockAddrs) events, relocked)
   end
 
   include LocksetAnalysis.MakeMay (Arg)
