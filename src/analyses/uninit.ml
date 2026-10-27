@@ -29,17 +29,19 @@ struct
   let threadspawn man ~multiple lval f args fman = man.local
   let exitstate  v : D.t = D.empty ()
 
+  (** [access_address ask write lv] lists the variables with offsets that [lv] may denote, each paired with [write].
+      An address set that also contains [UnknownPtr] still lists its known addresses;
+      the unknown one is reported, since it could denote a variable the list does not contain. *)
   let access_address (ask: Queries.ask) write lv =
-    match ask.f (Queries.MayPointTo (AddrOf lv)) with
-    | ad when not (Queries.AD.is_top ad) ->
-      let to_extra addr xs =
-        match addr with
-        | Queries.AD.Addr.Addr (v,o) -> (v, o, write) :: xs
-        | _ -> xs
-      in
-      Queries.AD.fold to_extra ad []
-    | _ ->
-      M.info ~category:Unsound "Access to unknown address could be global"; []
+    let ad = ask.f (Queries.MayPointTo (AddrOf lv)) in
+    if Queries.AD.may_be_unknown ad then
+      M.info ~category:Unsound "Access to unknown address could be global";
+    let to_extra addr xs =
+      match addr with
+      | Queries.AD.Addr.Addr (v,o) -> (v, o, write) :: xs
+      | _ -> xs
+    in
+    Queries.AD.fold to_extra ad []
 
   let rec access_one_byval a rw (exp:exp) =
     match exp with
@@ -193,16 +195,14 @@ struct
 
   let remove_unreachable (ask: Queries.ask) (args: exp list) (st: D.t) : D.t =
     let reachable =
+      (* The known addresses are kept also when the set contains [UnknownPtr].
+         [UnknownPtr] itself is dropped; Base reports it when it enters the function. *)
       let do_exp e a =
-        match ask.f (Queries.ReachableFrom e) with
-        | ad when not (Queries.AD.is_top ad) ->
-          ad
-          |> Queries.AD.filter (function
-              | Queries.AD.Addr.Addr _ -> true
-              | _ -> false)
-          |> Queries.AD.join a
-        (* Ignore soundness warnings, as invalidation proper will raise them. *)
-        | _ -> a
+        ask.f (Queries.ReachableFrom e)
+        |> Queries.AD.filter (function
+            | Queries.AD.Addr.Addr _ -> true
+            | _ -> false)
+        |> Queries.AD.join a
       in
       List.fold_right do_exp args (AD.empty ())
     in
