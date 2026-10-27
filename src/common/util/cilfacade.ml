@@ -20,6 +20,12 @@ let create_var (var: varinfo) =
   let hash = Hashtbl.hash { var with vid = 0 } in
   { var with vid = - hash } (* Hashtbl.hash returns non-negative integer *)
 
+(** Attribute of the variables that hold, in the state of a variadic function, the arguments passed in place of ["..."]. *)
+let varargs_attr = "goblint_varargs"
+
+(** Is a variable that holds an argument passed in place of ["..."]? Such a variable is read only through a [va_list] by [va_arg]. *)
+let is_varargs_var (v: varinfo) = hasAttribute varargs_attr v.vattr
+
 
 (** Is character type (N1570 6.2.5.15)? *)
 let isCharType t =

@@ -164,7 +164,7 @@ struct
     | Some v -> v
     | None ->
       let name = Pretty.sprint ~width:max_int (Pretty.dprintf "VARARGS%d(%a)" i d_type t) in
-      let v = Cilfacade.create_var @@ makeVarinfo false name t in
+      let v = Cilfacade.create_var { (makeVarinfo false name t) with vattr = [Attr (Cilfacade.varargs_attr, [])] } in
       Hashtbl.replace varargs_table key v;
       v
 
@@ -1089,9 +1089,13 @@ struct
       (** Lookup value at base address [addr] with given offset [ofs]. *)
       let lookup_with_offs addr =
         let v = (* abstract base value *)
-          if cast_ok addr then
+          match addr with
+          | Addr.Addr (x, _) when Cilfacade.is_varargs_var x ->
+            (* A read of an argument variable other than by va_arg reads the representation of a va_list, which the argument variables do not model. *)
+            VD.top_value t
+          | _ when cast_ok addr ->
             get_addr ~man ~top:(VD.top_value t) st addr (Some exp)  (* downcasts are safe *)
-          else
+          | _ ->
             VD.top () (* upcasts not! *)
         in
         let v' = VD.cast ~kind:Internal t v in (* cast to the expected type (the abstract type might be something other than t since we don't change addresses upon casts!) *) (* TODO: proper castkind *)
@@ -1889,7 +1893,12 @@ struct
     let lval_raw = (Option.map (fun x -> Lval x) lval_raw) in
     if M.tracing then M.tracel "set" "lval: %a\nvalue: %a\nstate: %a" AD.pretty lval VD.pretty value CPA.pretty st.cpa;
     let update_one x store =
-      set_addr ~man ?invariant ?blob_destructive ?lval_raw ?rval_raw ?t_override store x lval_type value
+      match x with
+      | Addr.Addr (v, _) when Cilfacade.is_varargs_var v ->
+        (* A write to an argument variable writes the representation of a va_list, after which va_arg may read anything. *)
+        { store with BaseDomain.cpa = CPA.add v (VD.top_value v.vtype) store.BaseDomain.cpa }
+      | _ ->
+        set_addr ~man ?invariant ?blob_destructive ?lval_raw ?rval_raw ?t_override store x lval_type value
     in try
       (* We start from the current state and an empty list of global deltas,
        * and we assign to all the different possible places: *)
