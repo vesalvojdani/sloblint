@@ -236,16 +236,22 @@ struct
       man.sideg (V.access memoroot) (G.create_access (OffsetTrie.singleton offset (`Lifted (Access.AS.empty ()))));
     side_vars man memo
 
-  (** Get immediate type_suffix memo. *)
-  let type_suffix_memo ((root, offset) : Access.Memo.t) : Access.Memo.t option =
-    (* No need to make ana.race.direct-arithmetic return None here,
+  (** Get immediate type_suffix memos.
+      A field stands for its memory location (see {!Access.memory_location_field}),
+      so its type suffixes are those of every field in {!Access.memory_location_fields}. *)
+  let type_suffix_memos ((root, offset) : Access.Memo.t) : Access.Memo.t list =
+    (* No need to make ana.race.direct-arithmetic return [] here,
        because (int) is empty anyway since Access.add_distribute_outer isn't called. *)
     match root, offset with
-    | `Var v, _ -> Some (`Type (Cil.typeSig v.vtype), offset) (* global.foo.bar -> (struct S).foo.bar *) (* TODO: Alloc variables void type *)
-    | _, `NoOffset -> None (* primitive type *)
-    | _, `Field (f, offset') -> Some (`Type (Cil.typeSig f.ftype), offset') (* (struct S).foo.bar -> (struct T).bar *)
-    | `Type (TSArray (ts, _, _)), `Index ((), offset') -> Some (`Type ts, offset') (* (int[])[*] -> int *)
-    | _, `Index ((), offset') -> None (* TODO: why indexing on non-array? *)
+    | `Var v, _ -> [(`Type (Cil.typeSig v.vtype), offset)] (* global.foo.bar -> (struct S).foo.bar *) (* TODO: Alloc variables void type *)
+    | _, `NoOffset -> [] (* primitive type *)
+    | _, `Field (f, offset') -> (* (struct S).foo.bar -> (struct T).bar *)
+      Access.memory_location_fields f
+      |> List.map (fun f -> Cil.typeSig f.ftype)
+      |> List.sort_uniq CilType.Typsig.compare
+      |> List.map (fun ts -> (`Type ts, offset'))
+    | `Type (TSArray (ts, _, _)), `Index ((), offset') -> [(`Type ts, offset')] (* (int[])[*] -> int *)
+    | _, `Index ((), offset') -> [] (* TODO: why indexing on non-array? *)
 
   let rec find_type_suffix' man ((root, offset) as memo : Access.Memo.t) : Access.AS.t =
     let trie = G.access (man.global (V.access root)) in
@@ -259,9 +265,9 @@ struct
 
   (** Find accesses from all type_suffixes transitively. *)
   and find_type_suffix man (memo : Access.Memo.t) : Access.AS.t =
-    match type_suffix_memo memo with
-    | Some type_suffix_memo -> find_type_suffix' man type_suffix_memo
-    | None -> Access.AS.empty ()
+    List.fold_left (fun accs type_suffix_memo ->
+        Access.AS.union accs (find_type_suffix' man type_suffix_memo)
+      ) (Access.AS.empty ()) (type_suffix_memos memo)
 
   let query man (type a) (q: a Queries.t): a Queries.result =
     match q with
