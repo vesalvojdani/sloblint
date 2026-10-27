@@ -930,6 +930,26 @@ struct
     in
     join malloc calloc
 
+  (** Whether reading the member [fld] of a union whose member written last is [active_field] and whose stored value is [value]
+      gives any value of [fld]'s type, instead of [value] cast to that type:
+      the two are not the same member, and one of them is a bit-field.
+      A bit-field occupies some of the bits of its storage unit, and which ones is implementation-defined (C11 6.7.2.1p11),
+      so a value stored through one member does not determine the value of the other.
+      The exception is the integer 0 written through a member that is not a bit-field and has the size of the union,
+      which makes every bit of the union zero, so that every bit-field reads as 0.
+      If the member written last is unknown ([`Top]), this is whether the union has a bit-field member. *)
+  let union_read_is_unknown (active_field: UnionDomain.Field.t) (value: t) (fld: fieldinfo) =
+    let is_bitfield f = Option.is_some f.fbitfield in
+    let zeroes_union active =
+      not (is_bitfield active)
+      && (match value with Int i -> GobOption.exists (Z.equal Z.zero) (ID.to_int i) | _ -> false)
+      && (try Cilfacade.bytesSizeOf active.ftype = Cilfacade.bytesSizeOf (TComp (fld.fcomp, [])) with Cil.SizeOfError _ -> false)
+    in
+    match active_field with
+    | `Lifted active -> not (CilType.Fieldinfo.equal active fld) && (is_bitfield active || is_bitfield fld) && not (zeroes_union active)
+    | `Top -> List.exists is_bitfield fld.fcomp.cfields
+    | `Bot -> false
+
   (* Funny, this does not compile without the final type annotation! *)
   let rec eval_offset (ask: VDQ.t) (x: t) (offs:offs) (exp:exp option) (v:lval option) (t:typ): t =
     let rec do_eval_offset (x:t) (offs:offs) (l:lval option) (o:offset option): t =
@@ -969,12 +989,20 @@ struct
             end
           | `Field (fld, offs) -> begin
               match x with
-              | Union (_, value) ->
+              | Union (active_field, value) ->
                 (match value, Cil.unrollType fld.ftype with
                  (* only return an actual value if we have a type and return actually the exact same type *)
                  | Float f_value, TFloat(fkind, _) when FD.get_fkind f_value = fkind -> Float f_value
                  | Float _, t -> top_value t
                  | _, TFloat(fkind, _)  when not (Cilfacade.isComplexFKind fkind)-> Float (FD.top_of fkind)
+                 | _, t when union_read_is_unknown active_field value fld ->
+                   (* any value of the bit-field's width, or of the member's type *)
+                   let top = match t, fld.fbitfield with
+                     | TInt (ik, _), Some _ -> Int (ID.top_of ?bitfield:fld.fbitfield ik)
+                     | _ -> top_value fld.ftype
+                   in
+                   let l', o' = shift_one_over l o in
+                   do_eval_offset top offs l' o'
                  | _ ->
                    let x = cast ~kind:Internal fld.ftype value in (* TODO: proper castkind *)
                    let l', o' = shift_one_over l o in
@@ -1152,8 +1180,8 @@ struct
                         top (), offs
                     end
                   in
-                  Union (`Lifted fld, do_update_offset tempval tempoffs l' o')
-                | Bot -> Union (`Lifted fld, do_update_offset Bot offs l' o')
+                  Union (`Lifted fld, do_update_offset ~bitfield:fld.fbitfield tempval tempoffs l' o')
+                | Bot -> Union (`Lifted fld, do_update_offset ~bitfield:fld.fbitfield Bot offs l' o')
                 | Top -> M.warn ~category:Imprecise "Trying to update a field, but the union is unknown"; top ()
                 | _ -> M.warn ~category:Imprecise "Trying to update a field, but was not given a union"; top ()
               end
