@@ -25,7 +25,10 @@
   [Info][Imprecise] Invalidating expressions: & tmp (90-distribute-fields-type-1.c:39:3-39:17)
   [Error][Imprecise][Unsound] Function definition missing for getS (90-distribute-fields-type-1.c:31:3-31:20)
   [Error][Imprecise][Unsound] Function definition missing for getT (90-distribute-fields-type-1.c:39:3-39:17)
+  [Info][Assumption] Assignment to unknown address, assuming no write happened. (90-distribute-fields-type-1.c:31:3-31:20)
+  [Info][Assumption] Assignment to unknown address, assuming no write happened. (90-distribute-fields-type-1.c:39:3-39:17)
   [Error][Imprecise][Unsound] Function definition missing
+  [Info][Assumption] Assignment to unknown address, assuming no write happened.
 
   $ goblint --enable warn.deterministic --enable allglobs --enable dbg.full-output 90-distribute-fields-type-1.c > full-output.txt 2>&1
 
