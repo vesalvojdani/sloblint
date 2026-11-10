@@ -939,10 +939,17 @@ struct
           let ik = Cilfacade.get_ikind typ in
           match v with
           | Address a ->
-            (* get definite addrs from vs *)
+            (* Whether ad is one address that stands for one object. As in eq of evalbinop_base, a definite address of a variable for which IsMultiple holds stands for several objects, so the common exp can hold it and still differ from the side it comes from. *)
+            let is_definite_single_object ad =
+              AD.is_definite ad &&
+              match Addr.to_var (AD.choose ad) with
+              | Some var -> not (man.ask (Q.IsMultiple var))
+              | None -> true
+            in
+            (* get the addresses from vs that are definite and stand for one object *)
             let rec to_definite_ad: value list -> AD.t = function
               | [] -> AD.empty ()
-              | Address a :: vs when AD.is_definite a ->
+              | Address a :: vs when is_definite_single_object a ->
                 AD.union a (to_definite_ad vs)
               | _ :: vs ->
                 to_definite_ad vs
