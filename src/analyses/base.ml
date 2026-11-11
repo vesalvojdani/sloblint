@@ -785,6 +785,52 @@ struct
     done;
     !collected
 
+  (** Adjust the result [v] of casting [orig], the value of [exp], to pointer type [t].
+
+      Pointer arithmetic adds to the last index of an address in units of the pointer's target type,
+      and [ValueDomain.cast_addr] returns an address unchanged when it cannot adjust its offset to the new type.
+      If the target types of [exp] and [t] differ in size, such an unchanged last index counts objects of the old target type,
+      but further pointer arithmetic and memOutOfBounds read it in units of the new one (see #1025).
+      If the old size is a multiple of the new one, a possibly non-zero last index is joined with its value in the new units;
+      the old value stays, since Base's reads and writes, [Mval.semantic_equal] and inner offsets use the declared types.
+      Otherwise, or if a size is unknown, such an index becomes top.
+      Casts from and to [void *] are left alone: [ValueDomain.cast] ignores them, and the index keeps the units
+      of the last non-[void] pointer type, which memOutOfBounds uses for library arguments. *)
+  let rescale_kept_index (exp: exp) (t: typ) (orig: value) (v: value): value =
+    match orig, v, Cil.unrollType t with
+    | Address orig_a, Address a, TPtr (target, _) when not (isVoidType target) ->
+      begin match Cil.unrollType (Cilfacade.typeOf exp) with
+        | TPtr (from_target, _) when not (isVoidType from_target) ->
+          let sizes = try Some (Cilfacade.bytesSizeOf from_target, Cilfacade.bytesSizeOf target) with SizeOfError _ -> None in
+          let rescale i =
+            match sizes with
+            | _ when IdxDom.equal_to Z.zero i = `Eq -> i
+            | Some (from_size, size) when from_size = size -> i
+            | Some (from_size, size) when size > 0 && from_size > 0 && from_size mod size = 0 ->
+              (* Binary operations on offsets should not generate overflow warnings in SV-COMP *)
+              let@ () = GobRef.wrap AnalysisState.executing_speculative_computations true in
+              begin try IdxDom.join i (IdxDom.mul i (IdxDom.of_int (Z.of_int (from_size / size))))
+                with IntDomain.ArithmeticOnIntegerBot _ -> IdxDom.top ()
+              end
+            | _ -> IdxDom.top ()
+          in
+          let rec rescale_last_index = function
+            | `Index (i, `NoOffset) -> `Index (rescale i, `NoOffset)
+            | `Index (i, o) -> `Index (i, rescale_last_index o)
+            | `Field (f, o) -> `Field (f, rescale_last_index o)
+            | `NoOffset -> `NoOffset
+          in
+          (* An address that cast_addr changed has an offset that fits the new type. *)
+          let rescale_unchanged = function
+            | Addr.Addr (x, o) as addr when AD.mem addr orig_a -> Addr.Addr (x, rescale_last_index o)
+            | addr -> addr
+          in
+          Address (AD.map rescale_unchanged a)
+        | _ -> v
+        | exception Cilfacade.TypeOfError _ -> v
+      end
+    | _ -> v
+
   (** Does casting a pointer to [it] and (back) to [t] have to give the original pointer?
 
       Implementation-defined by C11 6.3.2.3p5-6.
@@ -997,12 +1043,12 @@ struct
          Evaluating the casts separately would turn non-null addresses into unknown integers and pointers. *)
       | CastE (kind, t, CastE (int_kind, it, inner)) when is_pointer_integer_roundtrip t it ->
         begin match eval_rv ~man st inner with
-          | Address _ as v -> VD.cast ~kind t v
+          | Address _ as v -> rescale_kept_index inner t v (VD.cast ~kind t v)
           | v -> VD.cast ~kind t (VD.cast ~kind:int_kind it v)
         end
       | CastE (kind, t, exp) ->
         let v = eval_rv ~man st exp in
-        VD.cast ~kind t v
+        rescale_kept_index exp t v (VD.cast ~kind t v)
       | SizeOf _
       | Real _
       | Imag _

@@ -241,7 +241,12 @@ struct
     let (behavior:MessageCategory.behavior) = Undefined MemoryOutOfBoundsAccess in
     let cwe_number = 823 in
     let eval_n = man.ask (Queries.EvalInt n) in
-    let ptr_type = typeOf ptr in
+    (* Base does not change addresses cast to void *, so their last index counts objects of the type before the cast *)
+    let rec strip_void_ptr_casts = function
+      | CastE (_, t, e) when isVoidPtrType t -> strip_void_ptr_casts e
+      | e -> e
+    in
+    let ptr_type = typeOf (strip_void_ptr_casts ptr) in
     let* addr = man.ask (Queries.MayPointTo ptr) in
     let ptr_size = get_addr_size man addr in
     let addr_offs = get_addr_offset ptr_type addr in
