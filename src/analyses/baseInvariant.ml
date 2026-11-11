@@ -179,8 +179,15 @@ struct
             end
           | Address n -> begin
               if M.tracing then M.tracec "invariant" "Yes, %a is not %a" d_lval x AD.pretty n;
+              (* Removing n from x is sound only if n is one object. A definite address of a variable for which IsMultiple holds stands for several objects, so x can hold it and still differ from value. Such variables are, for example, a heap variable, unless ana.malloc.unique_address_count makes its allocation unique, and a local of a recursive function whose outer copy the arguments of a call reach. *)
+              let n_is_one_object =
+                AD.is_definite n &&
+                match ValueDomain.Addr.to_var (AD.choose n) with
+                | Some v -> not (man.Analyses.ask (Queries.IsMultiple v))
+                | None -> true
+              in
               match eval_rv_address ~man st (Lval x) with
-              | Address a when AD.is_definite n ->
+              | Address a when n_is_one_object ->
                 `Refine (x, Address (AD.diff a n))
               | Top when AD.is_null n ->
                 `Refine (x, Address AD.not_null)
