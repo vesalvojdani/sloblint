@@ -48,7 +48,7 @@ sig
   type value
 
   val set: VDQ.t -> t -> Basetype.CilExp.t option * idx -> value -> t
-  val make: ?varAttr:attributes -> ?typAttr:attributes -> SizeDomain.t -> value -> t
+  val make: ?varAttr:attributes -> ?typAttr:attributes -> ?uninit:bool -> SizeDomain.t -> value -> t
   val length: t -> SizeDomain.t option
 
   val map: (value -> value) -> t -> t
@@ -148,7 +148,7 @@ struct
       v
     | _ ->
       join a v
-  let make ?(varAttr=[]) ?(typAttr=[])  i v = v
+  let make ?(varAttr=[]) ?(typAttr=[]) ?(uninit=false) i v = v
   let length _ = None
 
   let move_if_affected ?(replace_with_const=false) _ x _ _ = x
@@ -253,9 +253,10 @@ struct
     | _ ->
       set ask (xl, xr) (ie, i) v
 
-  let make ?(varAttr=[]) ?(typAttr=[]) _ v =
+  let make ?(varAttr=[]) ?(typAttr=[]) ?(uninit=false) _ v =
     let xl = BatList.make (factor ()) v in
-    (xl,Val.bot ())
+    (* The elements past the unrolled ones are only weakly updated. For an uninitialized array they start at bottom, so that writes determine them; this assumes none of them is read before it is written. *)
+    (xl, if uninit then Val.bot () else v)
   let length _ = None
   let move_if_affected ?(replace_with_const=false) _ x _ _ = x
   let get_vars_in_e _ = []
@@ -659,7 +660,7 @@ struct
   let set = set_with_length None
 
 
-  let make ?(varAttr=[]) ?(typAttr=[]) i v:t =
+  let make ?(varAttr=[]) ?(typAttr=[]) ?(uninit=false) i v:t =
     Joint v
 
   let length _ = None
@@ -864,7 +865,7 @@ struct
     if checkBounds then (array_oob_check (x, l) (e, v));
     Base.get ask x (e, v)
   let set (ask: VDQ.t) (x,l) i v = Base.set ask x i v, l
-  let make ?(varAttr=[]) ?(typAttr=[])  l x = Base.make l x, l
+  let make ?(varAttr=[]) ?(typAttr=[]) ?(uninit=false) l x = Base.make l x, l
   let length (_,l) = Some l
   let move_if_affected ?(replace_with_const=false) _ x _ _ = x
   let map f (x, l):t = (Base.map f x, l)
@@ -908,7 +909,7 @@ struct
     if checkBounds then (array_oob_check (x, l) (e, v));
     Base.get ask x (e, v)
   let set ask (x,l) i v = Base.set_with_length (Some l) ask x i v, l
-  let make ?(varAttr=[]) ?(typAttr=[])  l x = Base.make l x, l
+  let make ?(varAttr=[]) ?(typAttr=[]) ?(uninit=false) l x = Base.make l x, l
   let length (_,l) = Some l
 
   let move_if_affected ?replace_with_const ask (x,l) v i =
@@ -962,7 +963,7 @@ struct
     if checkBounds then (array_oob_check (x, l) (e, v));
     Base.get ask x (e, v)
   let set (ask: VDQ.t) (x,l) i v = Base.set ask x i v, l
-  let make ?(varAttr=[]) ?(typAttr=[]) l x = Base.make l x, l
+  let make ?(varAttr=[]) ?(typAttr=[]) ?(uninit=false) l x = Base.make ~uninit l x, l
   let length (_,l) = Some l
 
   let move_if_affected ?(replace_with_const=false) _ x _ _ = x
@@ -1155,7 +1156,7 @@ struct
     (nulls, size)
 
 
-  let make ?(varAttr=[]) ?(typAttr=[]) i v =
+  let make ?(varAttr=[]) ?(typAttr=[]) ?(uninit=false) i v =
     let min_i, max_i = match SizeDomain.minimal i, SizeDomain.maximal i with
       | Some min_i, Some max_i ->
         if min_i <. Z.zero && max_i <. Z.zero then
@@ -1761,10 +1762,10 @@ struct
     | TrivialDomain -> (None, Some (T.top ()), None)
     | UnrolledDomain -> (None, None, Some (U.top ()))
 
-  let make ?(varAttr=[]) ?(typAttr=[]) i v = to_t @@  match get_domain ~varAttr ~typAttr with
+  let make ?(varAttr=[]) ?(typAttr=[]) ?(uninit=false) i v = to_t @@  match get_domain ~varAttr ~typAttr with
     | PartitionedDomain -> (Some (P.make i v), None, None)
     | TrivialDomain -> (None, Some (T.make i v), None)
-    | UnrolledDomain -> (None, None, Some (U.make i v))
+    | UnrolledDomain -> (None, None, Some (U.make ~uninit i v))
 
   (* convert to another domain *)
   let index_as_expression i = (Some (Cil.integer i), Idx.of_int (Z.of_int i)) (* TODO: used IInt *)
@@ -1863,7 +1864,7 @@ struct
       (a, N.top ())
 
   let set (ask:VDQ.t) (t_f, t_n) i v = construct (A.set ask t_f i v) (fun () -> N.set ask t_n i v)
-  let make ?(varAttr=[]) ?(typAttr=[]) i v = construct (A.make ~varAttr ~typAttr i v) (fun () -> N.make ~varAttr ~typAttr i v)
+  let make ?(varAttr=[]) ?(typAttr=[]) ?(uninit=false) i v = construct (A.make ~varAttr ~typAttr ~uninit i v) (fun () -> N.make ~varAttr ~typAttr i v)
   let map f (t_f, t_n) = construct (A.map f t_f) (fun () -> N.map f t_n)
   let update_length newl (t_f, t_n) = construct (A.update_length newl t_f) (fun () -> N.update_length newl t_n)
 

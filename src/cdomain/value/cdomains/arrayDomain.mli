@@ -25,9 +25,11 @@ sig
   (** Returns a new abstract value, where the given index is replaced with the
     * given element. *)
 
-  val make: ?varAttr:Cil.attributes -> ?typAttr:Cil.attributes -> SizeDomain.t -> value -> t
+  val make: ?varAttr:Cil.attributes -> ?typAttr:Cil.attributes -> ?uninit:bool -> SizeDomain.t -> value -> t
   (** [make l e] creates an abstract representation of an array of length [l]
-    * containing the element [e]. *)
+    * containing the element [e]. With [~uninit:true], the array is
+    * uninitialized and the unrolled domain keeps its elements past the
+    * unrolled ones at bottom until they are written. *)
 
   val length: t -> SizeDomain.t option
   (** returns length of array if known *)
