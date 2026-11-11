@@ -27,7 +27,7 @@ void size_mul() {
   long long arr[4611686018427387903L]; // 64bit OCaml max_int (2^62-1) because CIL array length is int (not Z.t)
   arr[0] = 42; // NOWARN (overflow, OOB)
   arr[-1] = 42; // NOWARN (overflow), TODO WARN! (OOB)
-  *(arr - 1) = 42; // NOWARN (overflow), TODO WARN! (OOB)
+  *(arr - 1) = 42; // NOWARN (overflow), WARN! (OOB)
 
   long long *parr = &arr;
   *parr = 42; // NOWARN (overflow), NOWARN (OOB)
