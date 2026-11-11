@@ -208,7 +208,7 @@ struct
       let typAttr = typeAttrs ai in
       let can_recover_from_top = ArrayDomain.can_recover_from_top (ArrayDomain.get_domain ~varAttr ~typAttr) in
       let len = array_length_size (SizeDomain.bot ()) length in
-      Array (CArrays.make ~varAttr ~typAttr len (if can_recover_from_top then (init_value ai) else (bot_value ai)))
+      Array (CArrays.make ~varAttr ~typAttr ~uninit:true len (if can_recover_from_top then (init_value ai) else (bot_value ai)))
     (* | t when is_thread_type t -> Thread (ConcDomain.ThreadSet.empty ()) *)
     | TNamed ({ttype=t; _}, _) -> init_value ~varAttr t (* TODO: Should this add attributes from TNamed to t like unrollType? *)
     | _ -> Top
