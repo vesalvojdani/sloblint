@@ -235,6 +235,16 @@ struct
           | _ ->
             (None, Idx.top ())
         in
+        let item_size_in_bytes =
+          match o, Option.map unrollType typ with
+          | `Field (field, _), Some TPtr _ ->
+            (* The target of the pointer type given by memOutOfBounds describes the end of the offset, not the element this index counts.
+               An index followed by a field usually counts elements of the field's struct or union, but the offset does not record the unit, so keep both sizes. *)
+            let@ () = GobRef.wrap AnalysisState.executing_speculative_computations true in
+            Idx.join item_size_in_bytes (idx_of_int (Cilfacade.bytesSizeOf (TComp (field.fcomp, []))))
+          | _ ->
+            item_size_in_bytes
+        in
         (* Binary operations on offsets should not generate overflow warnings in SV-COMP *)
         let bytes_offset =
           let@ () = GobRef.wrap AnalysisState.executing_speculative_computations true in
