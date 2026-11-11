@@ -765,6 +765,17 @@ struct
       [special_unknown_invalidate man f args]
 
   let threadspawn man ~multiple lval f args fman =
+    let is_known = match Cilfacade.find_varinfo_fundec f with _ -> true | exception Not_found -> false in
+    if not is_known then (
+      (* A thread of an unknown function is not analyzed, so it never reaches Priv.thread_return.
+         Its V.thread would stay bot, which Priv.thread_join takes for a thread that cannot terminate,
+         so that reads of protected globals after joining it are bot.
+         Let it return from its initial state, as a thread with an empty body would. *)
+      let fask = Analyses.ask_of_man fman in
+      match ThreadId.get_current fask with
+      | `Lifted tid -> ignore (Priv.thread_return fask man.global man.sideg tid fman.local)
+      | _ -> ()
+    );
     man.local
 
   let event man e oman =
