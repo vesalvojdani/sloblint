@@ -129,9 +129,11 @@ struct
   let ptr_only_has_str_addr man ptr =
     ValueDomain.AD.for_all (function StrPtr _ -> true | _ -> false) (man.ask (Queries.MayPointTo ptr))
 
-  let get_addr_offset typ (addr: ValueDomain.Addr.t) =
+  (** The offset in bytes of [addr] from the start of its variable.
+      Indices in the offset count elements of the types declared in the variable's type, whatever the type of the pointer holding [addr]. *)
+  let get_addr_offset (addr: ValueDomain.Addr.t) =
     match addr with
-    | Addr (_, offs) -> PreValueDomain.Offs.to_index ~typ offs
+    | Addr (v, offs) -> PreValueDomain.Offs.to_index ~typ:v.vtype offs
     | UnknownPtr -> IndexDomain.top () (* TODO: does this make sense? *)
     | NullPtr
     | StrPtr _ -> IndexDomain.bot () (* TODO: do these make sense? *)
@@ -184,10 +186,9 @@ struct
   and check_no_binop_deref man lval_exp =
     let behavior = Undefined MemoryOutOfBoundsAccess in
     let cwe_number = 823 in
-    let ptr_type = typeOf lval_exp in
     let* addr = man.ask (Queries.MayPointTo lval_exp) in
     let ptr_size = get_addr_size man addr in
-    let addr_offs = get_addr_offset ptr_type addr in
+    let addr_offs = get_addr_offset addr in
     match ptr_size, addr_offs with
     | ptr_size, _ when SizeDomain.is_top ptr_size ->
       set_mem_safety_flag InvalidDeref;
@@ -241,10 +242,9 @@ struct
     let (behavior:MessageCategory.behavior) = Undefined MemoryOutOfBoundsAccess in
     let cwe_number = 823 in
     let eval_n = man.ask (Queries.EvalInt n) in
-    let ptr_type = typeOf ptr in
     let* addr = man.ask (Queries.MayPointTo ptr) in
     let ptr_size = get_addr_size man addr in
-    let addr_offs = get_addr_offset ptr_type addr in
+    let addr_offs = get_addr_offset addr in
     match ptr_size, eval_n with
     | ptr_size, _ when SizeDomain.is_top ptr_size ->
       set_mem_safety_flag InvalidDeref;

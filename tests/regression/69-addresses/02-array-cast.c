@@ -1,4 +1,3 @@
-// SKIP
 #include <goblint.h>
 
 int main() {
@@ -19,8 +18,9 @@ int main() {
 
   char* a_4intoffset = (char*) (a + 4);
 
-  __goblint_check(a_4intoffset == b_intoffset); // FAIL
-  __goblint_check((char*) (a + 4) == b_char + sizeof(int)); // FAIL
+  // Base does not take the addresses of different elements to be unequal.
+  __goblint_check(a_4intoffset == b_intoffset); // TODO FAIL
+  __goblint_check((char*) (a + 4) == b_char + sizeof(int)); // TODO FAIL
 
   return 0;
 }

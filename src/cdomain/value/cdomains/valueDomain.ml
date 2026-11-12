@@ -461,6 +461,11 @@ struct
           | TFloat _, _
           | _, TFloat _ -> UnknownPtr
           | TVoid _, _ when not (Cilfacade.isCharType t) -> (* we had no information about the type (e.g. malloc), so we add it; ignore for casts to char* since they're special conversions (N1570 6.3.2.3.7) *)
+            (* An index into an object of type void counts bytes; with the new type it counts objects of type t. *)
+            let o = match o with
+              | `Index (i, `NoOffset) -> `Index (IndexDomain.retype ~from:vtype ~into:t i, `NoOffset)
+              | o -> o
+            in
             Addr ({ v with vtype = t }, o) (* HACK: equal varinfo with different type, causes inconsistencies down the line, when we again assume vtype being "right", but joining etc gives no consideration to which type version to keep *)
           | _, _ ->
             begin try Addr (v, (adjust_offs v o None)) (* cast of one address by adjusting the abstract offset *)

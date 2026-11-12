@@ -42,7 +42,8 @@ void main(void) {
     __mptr___0 = (struct ldv_list_head const *)msg->list.next;
     n = (struct ldv_msg *)((char *)__mptr___0 - (size_t)(&((struct ldv_msg *)0)->list));
 
-    if (!((unsigned long)(&msg->list) != (unsigned long)(&ldv_global_msg_list))) { // NOWARN
+    // The list is empty, so &msg->list is &ldv_global_msg_list: the warning here is that the condition is always true, not an overflow.
+    if (!((unsigned long)(&msg->list) != (unsigned long)(&ldv_global_msg_list))) { // WARN
         goto loop_end;
     }
 
