@@ -15,6 +15,7 @@ int main(int argc, char const *argv[]) {
     memset(a, 0, 40); //WARN
     memcpy(a, b, 40); //WARN
 
-    memset(a, 0, 37); //NOWARN
-    memcpy(a, b, 37); //NOWARN
+    // a points to byte 12, so 37 bytes end past the 40-byte block
+    memset(a, 0, 37); //WARN
+    memcpy(a, b, 37); //WARN
 }

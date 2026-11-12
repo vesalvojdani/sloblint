@@ -314,53 +314,160 @@ struct
     | Lt | Gt | Le | Ge | Eq | Ne -> true
     | _ -> false
 
+  (** The type of the objects that an index into an object of type [t] counts:
+      its element type if [t] is an array type, and otherwise [t] itself,
+      since pointer arithmetic treats an object that is not an array as an array of one element (C11 6.5.6p7). *)
+  let index_elem_typ (t: typ option): typ option =
+    match Option.map Cil.unrollType t with
+    | Some (TArray (et, _, _)) -> Some et
+    | _ -> t
+
+  (** The offset of the sub-object that starts exactly [b] bytes into an object of type [t]:
+      the element of an array or the member of a struct containing that byte, followed by the offset of the sub-object within it.
+      At the sub-object, it descends to its first member or element as long as that is larger than [target_size] bytes,
+      as [ValueDomain.cast_addr] does for a cast to a pointer to a smaller type.
+      [None] if no sub-object starts there: the byte is inside a scalar, in padding, inside a bit-field or a union, or a size is unknown. *)
+  let rec offset_of_bytes ~(target_size: int) (t: typ) (b: Z.t): Offs.t option =
+    let size_of t = try Some (Cilfacade.bytesSizeOf t) with SizeOfError _ -> None in
+    if Z.equal b Z.zero then
+      let larger = match size_of t with Some size -> size > target_size | None -> false in
+      match Cil.unrollType t with
+      | TComp ({cstruct = true; cfields = f :: _; _}, _) when larger && f.fbitfield = None ->
+        Some (`Field (f, Option.default `NoOffset (offset_of_bytes ~target_size f.ftype Z.zero)))
+      | TArray (et, _, _) when larger ->
+        Some (`Index (IdxDom.of_int Z.zero, Option.default `NoOffset (offset_of_bytes ~target_size et Z.zero)))
+      | _ -> Some `NoOffset
+    else
+      match Cil.unrollType t with
+      | TArray (et, _, _) ->
+        begin match size_of et with
+          | Some size when size > 0 ->
+            let size = Z.of_int size in
+            let k = Z.fdiv b size in
+            Option.map (fun o -> `Index (IdxDom.of_int k, o)) (offset_of_bytes ~target_size et (Z.sub b (Z.mul k size)))
+          | _ -> None
+        end
+      | TComp ({cstruct = true; cfields; _}, _) ->
+        let contains f =
+          f.fbitfield = None &&
+          match Cilfacade.fieldBytesOffsetOnly f, size_of f.ftype with
+          | f_offset, Some f_size -> Z.leq (Z.of_int f_offset) b && Z.lt b (Z.of_int (f_offset + f_size))
+          | _, None -> false
+          | exception SizeOfError _ -> false
+        in
+        begin match List.find_opt contains cfields with
+          | Some f ->
+            let f_offset = Z.of_int (Cilfacade.fieldBytesOffsetOnly f) in
+            Option.map (fun o -> `Field (f, o)) (offset_of_bytes ~target_size f.ftype (Z.sub b f_offset))
+          | None -> None
+        end
+      | _ -> None
+
   (* Evaluate binop for two abstract values: *)
-  let evalbinop_base ~man (op: binop) (a1:value) (a2:value) (t:typ) :value =
+  (* [t1] is the static type of the first operand, if known; it is needed for [MinusPP]. *)
+  let evalbinop_base ~man ?t1 (op: binop) (a1:value) (a2:value) (t:typ) :value =
     if M.tracing then M.tracel "eval" "evalbinop %a %a %a" d_binop op VD.pretty a1 VD.pretty a2;
     (* We define a conversion function for the easy cases when we can just use
      * the integer domain operations. *)
     let bool_top ik = ID.(join (of_int ik Z.zero) (of_int ik Z.one)) in
-    (* An auxiliary function for ptr arithmetic on array values. *)
+    (* An auxiliary function for ptr arithmetic on array values.
+       [n] counts objects of the target type of the pointer type [t],
+       whereas an index in an offset counts elements of the type declared at that point of the offset (see [index_elem_typ]),
+       so [n] is converted from the size of the one to the size of the other.
+       If the result is not a whole number of elements, but a definite number of bytes,
+       it is the element before that position followed by the sub-object starting there (see [offset_of_bytes]), if there is one;
+       otherwise it is an index that over-approximates the position (see [IdxDom.rescale]). *)
     let addToAddr n (addr:Addr.t) =
-      let typeOffsetOpt o t =
-        try
-          Some (Cilfacade.typeOffset t o)
-        with Cilfacade.TypeOfError _ ->
-          None
+      let n_idx = IdxDom.lift n in
+      let target_typ = match Cil.unrollType t with
+        | TPtr (target, _) -> Some target
+        | _ -> None
       in
-      (* adds n to the last offset *)
-      let rec addToOffset n (t:typ option) = function
+      (* [n] in bytes, if definite *)
+      let n_bytes =
+        match target_typ with
+        | Some target ->
+          begin match IdxDom.to_int n_idx, Cilfacade.bytesSizeOf target with
+            | Some n, size -> Some (Z.mul n (Z.of_int size))
+            | None, _ -> None
+            | exception SizeOfError _ -> None
+          end
+        | None -> None
+      in
+      let target_size =
+        match target_typ with
+        | Some target -> (try Some (Cilfacade.bytesSizeOf target) with SizeOfError _ -> None)
+        | None -> None
+      in
+      (* Add [n] to an index [i] counting objects of type [elem].
+         The result is [`Index] of the new index and the offset within the element it reaches. *)
+      let add_to_index (elem: typ option) (i: IdxDom.t) =
+        (* Binary operations on pointer types should not generate warnings in SV-COMP *)
+        let@ () = GobRef.wrap AnalysisState.executing_speculative_computations true in
+        let n_elems =
+          match target_typ, elem with
+          | Some target, Some elem -> IdxDom.retype ~from:target ~into:elem n_idx
+          | _, _ -> IdxDom.top ()
+        in
+        let in_element =
+          match n_bytes, elem, target_size with
+          | Some n_bytes, Some elem, Some target_size ->
+            begin match Cilfacade.bytesSizeOf elem with
+              | size when size > 0 ->
+                let size = Z.of_int size in
+                let k = Z.fdiv n_bytes size in
+                Option.map (fun o -> (IdxDom.of_int k, o)) (offset_of_bytes ~target_size elem (Z.sub n_bytes (Z.mul k size)))
+              | _ -> None
+              | exception SizeOfError _ -> None
+            end
+          | _, _, _ -> None
+        in
+        match in_element with
+        | Some (k, o) -> `Index (IdxDom.add i k, o)
+        | None -> `Index (IdxDom.add i n_elems, `NoOffset)
+      in
+      (* adds n to the last offset; [t] is the type of the object the offset leads into *)
+      let rec addToOffset (t:typ option) = function
         | `Index (i, `NoOffset) ->
-          (* Binary operations on pointer types should not generate warnings in SV-COMP *)
-          let@ () = GobRef.wrap AnalysisState.executing_speculative_computations true in
           (* If we have arrived at the last Offset and it is an Index, we add our integer to it *)
-          `Index(IdxDom.add i (IdxDom.lift n), `NoOffset)
+          add_to_index (index_elem_typ t) i
         | `Field (f, `NoOffset) ->
           (* If we have arrived at the last Offset and it is a Field,
-           * then check if we're subtracting exactly its offsetof.
-           * If so, n cancels out f exactly.
+           * then a definite number of bytes that stays within its struct leads to the sub-object starting there, if there is one.
+           * In particular, subtracting exactly the field's offset gives the struct itself.
            * This is to better handle container_of hacks. *)
-          let n_offset = IdxDom.lift n in
-          begin match t with
-            | Some t ->
-              let f_offset_bytes = Cilfacade.fieldBytesOffsetOnly f in
-              let f_offset = Z.of_int f_offset_bytes in
-              begin match IdxDom.(equal_to f_offset (neg n_offset)) with
-                | `Eq -> `NoOffset
-                | _ -> `Field (f, `Index (n_offset, `NoOffset))
+          let in_struct =
+            match n_bytes with
+            | Some n_bytes ->
+              let struct_typ = TComp (f.fcomp, []) in
+              let b = Z.add (Z.of_int (Cilfacade.fieldBytesOffsetOnly f)) n_bytes in
+              begin match Cilfacade.bytesSizeOf struct_typ, target_size with
+                | size, Some target_size when Z.leq Z.zero b && Z.lt b (Z.of_int size) && f.fcomp.cstruct -> offset_of_bytes ~target_size struct_typ b
+                | _, _ when Z.equal b Z.zero -> Some `NoOffset
+                | _, _ -> None
+                | exception SizeOfError _ -> None
               end
-            | None -> `Field (f, `Index (n_offset, `NoOffset))
+            | None -> None
+          in
+          begin match in_struct with
+            | Some o -> o
+            | None -> `Field (f, add_to_index (index_elem_typ (Some f.ftype)) (IdxDom.of_int Z.zero))
           end
         | `Index (i, o) ->
-          let t' = BatOption.bind t (typeOffsetOpt (Index (integer 0, NoOffset))) in (* actual index value doesn't matter for typeOffset *)
-          `Index(i, addToOffset n t' o)
+          `Index(i, addToOffset (index_elem_typ t) o)
         | `Field (f, o) ->
-          let t' = BatOption.bind t (typeOffsetOpt (Field (f, NoOffset))) in
-          `Field(f, addToOffset n t' o)
-        | `NoOffset -> `Index(IdxDom.lift n, `NoOffset)
+          `Field(f, addToOffset (Some f.ftype) o)
+        | `NoOffset ->
+          let is_array = match t with Some t -> Cil.isArrayType t | None -> false in
+          begin match add_to_index (index_elem_typ t) (IdxDom.of_int Z.zero) with
+            | `Index (k, o) when not is_array && IdxDom.to_int k = Some Z.zero ->
+              (* the position is in the object itself, which is not an array *)
+              o
+            | o -> o
+          end
       in
       match addr with
-      | Addr (x, o) -> AD.of_mval (x, addToOffset n (Some x.vtype) o)
+      | Addr (x, o) -> AD.of_mval (x, addToOffset (Some x.vtype) o)
       | NullPtr -> AD.of_int n
       | UnknownPtr
       | StrPtr _ ->
@@ -460,26 +567,37 @@ struct
           (* when subtracting pointers to arrays, per 6.5.6 of C-standard if we subtract two pointers to the same array, the difference *)
           (* between them is the difference in subscript *)
           begin
-            let rec calculateDiffFromOffset x y:value =
+            (* The difference counts objects of the target type of the pointers,
+               whereas an index counts elements of the type declared at that point of the offset (see [index_elem_typ]). *)
+            let target_typ = match Option.map Cil.unrollType t1 with
+              | Some (TPtr (target, _)) -> Some target
+              | _ -> None
+            in
+            (* [t] is the type of the object the offsets lead into *)
+            let rec calculateDiffFromOffset (t: typ option) x y:value =
               match x, y with
               | `Field ((xf:Cil.fieldinfo), xo), `Field((yf:Cil.fieldinfo), yo)
                 when CilType.Fieldinfo.equal xf yf ->
-                calculateDiffFromOffset xo yo
+                calculateDiffFromOffset (Some xf.ftype) xo yo
               | `Index (i, `NoOffset), `Index(j, `NoOffset) ->
                 begin
                   let diff = ValueDomain.IndexDomain.sub i j in
+                  let diff = match index_elem_typ t, target_typ with
+                    | Some elem, Some target -> IdxDom.retype ~from:elem ~into:target diff
+                    | _, _ -> IdxDom.top ()
+                  in
                   match ValueDomain.IndexDomain.to_int diff with
                   | Some z -> Int(ID.of_int ik z)
                   | _ -> Int (ID.top_of ik)
                 end
               | `Index (xi, xo), `Index(yi, yo) when xi = yi -> (* TODO: ID.equal? *)
-                calculateDiffFromOffset xo yo
+                calculateDiffFromOffset (index_elem_typ t) xo yo
               | _ -> Int (ID.top_of ik)
             in
             if AD.is_definite p1 && AD.is_definite p2 then
               match Addr.to_mval (AD.choose p1), Addr.to_mval (AD.choose p2) with
-              | Some (x, xo), Some (y, yo) when CilType.Varinfo.equal x y ->
-                calculateDiffFromOffset xo yo
+              | Some (x, xo), Some (y, yo) when CilType.Varinfo.equal x y && CilType.Typsig.equal (Cil.typeSig x.vtype) (Cil.typeSig y.vtype) ->
+                calculateDiffFromOffset (Some x.vtype) xo yo
               | _, _ ->
                 Int (ID.top_of ik)
             else
@@ -1081,7 +1199,8 @@ struct
     (* Evaluate structurally using base at first. *)
     let a1 = eval_rv ~man st e1 in
     let a2 = eval_rv ~man st e2 in
-    let r = evalbinop_base ~man op a1 a2 t in
+    let t1 = try Some (Cilfacade.typeOf e1) with Cilfacade.TypeOfError _ -> None in
+    let r = evalbinop_base ~man ?t1 op a1 a2 t in
     if Cil.isIntegralType t then (
       match r with
       | Int i when ID.to_int i <> None -> r (* Avoid fallback, cannot become any more precise. *)
@@ -1723,6 +1842,17 @@ struct
             (* This will usually lead to a type mismatch in the ValueDomain (and hence supertop) *)
             M.debug ~category:Analyzer "Could not obtain the type of %a" Addr.Mval.pretty (x, offs);
             lval_type
+    in
+    (* A write of a scalar narrower than the scalar of type [t] stored at [offs] changes only some of its bytes,
+       so the stored scalar becomes unknown rather than the written value cast to [t]. *)
+    let value =
+      let size_of t = try Some (Cilfacade.bytesSizeOf t) with SizeOfError _ -> None in
+      if Cil.isScalarType lval_type && Cil.isScalarType t then
+        match size_of lval_type, size_of t with
+        | Some lval_size, Some t_size when lval_size < t_size -> VD.top_value t
+        | _, _ -> value
+      else
+        value
     in
     let update_offset old_value =
       (* Projection globals to highest Precision *)

@@ -226,19 +226,32 @@ struct
         let@ () = GobRef.wrap AnalysisState.executing_speculative_computations true in
         Idx.add bytes_offset remaining_offset
       | `Index (x, o) ->
-        let (item_typ, item_size_in_bytes) =
+        (* An index into an array counts its elements; an index into an object of another type counts objects of that type,
+           as pointer arithmetic treats such an object as an array of one element. *)
+        let item_typ =
           match Option.map unrollType typ with
-          | Some TPtr(item_typ, _) (* for memOutOfBounds *)
-          | Some TArray(item_typ, _, _) ->
-            let item_size_in_bytes = Cilfacade.bytesSizeOf item_typ in
-            (Some item_typ, idx_of_int item_size_in_bytes)
-          | _ ->
-            (None, Idx.top ())
+          | Some TArray(item_typ, _, _) -> Some item_typ
+          | _ -> typ
+        in
+        let item_size_in_bytes =
+          match item_typ with
+          | Some item_typ ->
+            begin try idx_of_int (Cilfacade.bytesSizeOf item_typ)
+              with SizeOfError _ -> Idx.top ()
+            end
+          | None -> Idx.top ()
         in
         (* Binary operations on offsets should not generate overflow warnings in SV-COMP *)
         let bytes_offset =
           let@ () = GobRef.wrap AnalysisState.executing_speculative_computations true in
-          Idx.mul item_size_in_bytes x
+          let bytes_offset = Idx.mul item_size_in_bytes x in
+          (* An index that is not a single value may stand for a position inside an element, between the elements it contains
+             (pointer arithmetic gives such an index for a position that is not a whole number of elements),
+             so only the convex hull of the elements' byte offsets is kept, not, e.g., their congruence. *)
+          match Idx.to_int x, Idx.minimal bytes_offset, Idx.maximal bytes_offset with
+          | Some _, _, _ -> bytes_offset
+          | None, Some lo, Some hi -> Idx.of_interval (lo, hi)
+          | None, _, _ -> Idx.top ()
         in
         let remaining_offset = offset_to_index_offset ?typ:item_typ o in
         let@ () = GobRef.wrap AnalysisState.executing_speculative_computations true in

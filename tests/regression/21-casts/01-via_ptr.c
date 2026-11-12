@@ -78,8 +78,8 @@ int main(){
     b.y = 9;
     __goblint_check(((struct b*) &b.x.x)->y == 9);
 
-    // there are no assumptions one can make for following fields!
-    __goblint_check(*((&a.x)+1) == 8); // UNKNOWN!
+    // the int after a.x is a.y in the struct layout of the target machine
+    __goblint_check(*((&a.x)+1) == 8);
     // pointers into the middle that are casted out must be top!
     // this gives a segfault:
     __goblint_check(((struct a*) &a.y)->y == 8); // UNKNOWN!
