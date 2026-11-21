@@ -793,6 +793,60 @@ struct
     isPointerType t && isIntegralType it
     && (try bitsSizeOf it >= bitsSizeOf t with SizeOfError _ -> false)
 
+  let int_kind t = match Cil.unrollType t with
+    | TInt (ik, _) -> Some ik
+    | TEnum (ei, _) -> Some ei.ekind
+    | _ -> None
+
+  (** Whether a read at the integer type [t] from the integer [v] may cover bytes other than the lowest ones of [v],
+      in which case casting [v] to [t], which keeps the lowest bytes of [v], is unsound.
+      This is so whenever [t] is an integer type narrower than [v] and
+      - [at_index] holds: the read is at an index that may count elements of another type than that of [v], so which bytes of [v] it selects is unknown; or
+      - the target is not little-endian ([Cil.little_endian]), so that the lowest bytes of [v] are not at its start. *)
+  let reads_inside_wider_int t ~at_index (v: value) =
+    match v, int_kind t with
+    | Int i, Some t_ik ->
+      Cil.bytesSizeOfInt t_ik < Cil.bytesSizeOfInt (ID.ikind i) && (at_index || not !Cil.little_endian)
+    | _, _ -> false
+
+  (** Whether [t] is an integer type of another size than the integer [v]. *)
+  let int_of_other_size t (v: value) =
+    match v, int_kind t with
+    | Int i, Some t_ik -> Cil.bytesSizeOfInt t_ik <> Cil.bytesSizeOfInt (ID.ikind i)
+    | _, _ -> false
+
+  (** Whether the offset of [addr] ends in an [Index]: [addToAddr] adds to that index whatever the type of the pointer,
+      so its unit is not known, and [get_addr] ignores it for a [Blob].
+      An offset that is [`NoOffset] or ends in a [`Field] is the start of the stored value. *)
+  let addr_ends_in_index addr =
+    let rec ends_in_index: Addr.Offs.t -> bool = function
+      | `Index (_, `NoOffset) -> true
+      | `Index (_, o)
+      | `Field (_, o) -> ends_in_index o
+      | `NoOffset -> false
+    in
+    match addr with
+    | Addr.Addr (_, o) -> ends_in_index o
+    | _ -> false
+
+  (** Whether the offset [ofs] of the lvalue contains an [Index].
+      Such an index is in elements of the array type of the lvalue,
+      whereas [VD.eval_offset] takes it in elements of the stored array, which [VD.cast] keeps when the two element types differ.
+      So when [VD.eval_offset] returns an integer of another size than the type of the lvalue,
+      the index does not say which bytes of that integer, or of the elements after it, are read, whether the type of the lvalue is narrower or wider. *)
+  let rec has_index: offset -> bool = function
+    | Index _ -> true
+    | Field (_, o) -> has_index o
+    | NoOffset -> false
+
+  (** Whether a read of the lvalue [*p] with offset [ofs] at the integer type [t], where [p] points to [addr] and the value found there is [v],
+      gives the top value of [t] instead of [v] cast to [t].
+      This is so when [reads_inside_wider_int] holds, with [at_index] if [addr] ends in an [Index] or [ofs] contains one,
+      and when [ofs] contains an [Index] and [v] is an integer of another size than [t]. *)
+  let int_read_unknown addr ofs t (v: value) =
+    let at_index = has_index ofs in
+    reads_inside_wider_int t ~at_index:(at_index || addr_ends_in_index addr) v || (at_index && int_of_other_size t v)
+
   (* The evaluation function as mutually recursive eval_lv & eval_rv *)
   let rec eval_rv ~(man: _ man) (st: store) (exp:exp): value =
     if M.tracing then M.traceli "evalint" "base eval_rv %a" d_exp exp;
@@ -1066,10 +1120,19 @@ struct
           else
             VD.top () (* upcasts not! *)
         in
-        let v' = VD.cast ~kind:Internal t v in (* cast to the expected type (the abstract type might be something other than t since we don't change addresses upon casts!) *) (* TODO: proper castkind *)
+        let v' =
+          if reads_inside_wider_int t ~at_index:(addr_ends_in_index addr) v then
+            VD.top_value t
+          else
+            VD.cast ~kind:Internal t v (* cast to the expected type (the abstract type might be something other than t since we don't change addresses upon casts!) *) (* TODO: proper castkind *)
+        in
         if M.tracing then M.tracel "cast" "Ptr-Deref: cast %a to %a = %a!" VD.pretty v d_type t VD.pretty v';
         let v' = VD.eval_offset (Queries.to_value_domain_ask (Analyses.ask_of_man man)) v' (convert_offset ~man st ofs) (Some exp) None t in (* handle offset *)
-        v'
+        let lt = Cilfacade.typeOfLval lv in
+        if int_read_unknown addr ofs lt v' then
+          VD.top_value lt
+        else
+          v'
       in
       AD.fold (fun a acc -> VD.join acc (lookup_with_offs a)) p (VD.bot ())
 
@@ -1929,6 +1992,7 @@ struct
     let get_mval ~man st mval exp = get_mval ~man st mval exp
     let get ~man st addrs exp = get ~man st addrs exp
     let set ~man st lval lval_type ?lval_raw value = set ~man ~invariant:true st lval lval_type ?lval_raw value
+    let int_read_unknown = int_read_unknown
 
     let refine_entire_var = true
     let map_oldval oldval _ = oldval
@@ -3073,6 +3137,7 @@ struct
           let get ~man st addrs exp = get ~man st addrs exp
           let get_mval ~man st mval exp = get_mval ~man st mval exp
           let set ~man st lval lval_type ?lval_raw value = set ~man ~invariant:false st lval lval_type ?lval_raw value (* TODO: should have invariant false? doesn't work with empty cpa then, because meets *)
+          let int_read_unknown = int_read_unknown
 
           let refine_entire_var = false
           let map_oldval oldval t_lval =
