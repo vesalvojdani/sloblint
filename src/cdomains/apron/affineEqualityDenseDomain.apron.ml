@@ -354,11 +354,11 @@ struct
     if M.tracing then M.tracel "join" "join a: %a b: %a -> %a" pretty a pretty b pretty res;
     res
 
+  (* Affine equalities over a fixed environment have finite height, and join moves
+     to the least common environment, so widening as join terminates. Returning b
+     for different environments would drop a. *)
   let widen a b =
-    if Environment.equal a.env b.env then
-      join a b
-    else
-      b
+    join a b
 
   let narrow a b = a
 
