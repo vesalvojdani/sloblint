@@ -1,0 +1,3 @@
+  $ goblint --set ana.activated[+] useAfterFree --set ana.malloc.unique_address_count 1 89-uaf-xdr-free-several-pointees.c 2>&1 | grep "Assumption\|UseAfterFree"
+  [Info][Assumption] xdr_free is assumed not to free a block allocated by the same malloc, calloc or realloc call as an object that (char *)p may point to (the call inside an allocation wrapper, unless the wrapper is in ana.malloc.wrappers) (useAfterFree) (89-uaf-xdr-free-several-pointees.c:20:3-20:33)
+  [Info][Assumption] xdr_free is assumed not to free a block allocated by the same malloc, calloc or realloc call as an object that (char *)p may point to (the call inside an allocation wrapper, unless the wrapper is in ana.malloc.wrappers) (useAfterFree)

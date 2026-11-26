@@ -111,6 +111,28 @@ struct
     let callee_combined_state = HeapVars.join callee_stack_state callee_heap_state in
     (caller_stack_state, HeapVars.join caller_heap_state callee_combined_state)
 
+  (** The heap vars among the addresses [ad]. *)
+  let heap_vars_of man ad =
+    Queries.AD.fold (fun addr heap_vars ->
+        match addr with
+        | Queries.AD.Addr.Addr (var,_) when man.ask (Queries.IsAllocVar var) && man.ask (Queries.IsHeapVar var) -> HeapVars.add var heap_vars
+        | _ -> heap_vars
+      ) ad (HeapVars.empty ())
+
+  (** [state] after the current thread has freed the heap vars [freed_heap_vars].
+      The freeing thread is also side-effected to the global of each of them, for the accesses of other threads. *)
+  let free_heap_vars man state freed_heap_vars =
+    side_effect_mem_free man freed_heap_vars (get_current_threadid man) (get_joined_threads man);
+    (fst state, HeapVars.join (snd state) freed_heap_vars)
+
+  (** [state] after a call of [f] that frees the memory the addresses [ad] hold, except the heap vars [except].
+      Heap vars among [ad] are recorded as freed.
+      If [ad] may also hold the unknown pointer, the memory freed through it cannot be named, and the assumption that it is not accessed afterwards is declared. *)
+  let free_addresses man state (f:varinfo) ?(except = HeapVars.empty ()) ad =
+    if Queries.AD.may_be_unknown ad then
+      Assumptions.add "Memory that %s frees through an unknown pointer is assumed not to be accessed afterwards (useAfterFree)" f.vname;
+    free_heap_vars man state (HeapVars.diff (heap_vars_of man ad) except)
+
   let special man (lval:lval option) (f:varinfo) (arglist:exp list) : D.t =
     let state = man.local in
     let desc = LibraryFunctions.find f in
@@ -118,27 +140,40 @@ struct
     | Free ptr ->
       (* TODO: do this using Free Access events? *)
       begin match man.ask (Queries.MayPointTo ptr) with
-        | ad when not (Queries.AD.is_top ad) ->
-          let pointed_to_heap_vars =
-            Queries.AD.fold (fun addr state ->
-                match addr with
-                | Queries.AD.Addr.Addr (var,_) when man.ask (Queries.IsAllocVar var) && man.ask (Queries.IsHeapVar var) -> HeapVars.add var state
-                | _ -> state
-              ) ad (HeapVars.empty ())
-          in
-          (* Side-effect the tid that's freeing all the heap vars collected here *)
-          side_effect_mem_free man pointed_to_heap_vars (get_current_threadid man) (get_joined_threads man);
-          (* Add all heap vars, which ptr points to, to the state *)
-          (fst state, HeapVars.join (snd state) pointed_to_heap_vars)
+        | ad when not (Queries.AD.is_top ad) -> free_heap_vars man state (heap_vars_of man ad)
         | _ -> state
       end
+    | Realloc { ptr; _ } ->
+      (* [realloc] frees its old block if it moves it. The analysis does not decide whether it does, so the old block is recorded as freed.
+         If [realloc] fails (only with [sem.malloc.fail]) the old block stays valid, and a use of it after the failure is reported. *)
+      free_addresses man state f (man.ask (Queries.MayPointTo ptr))
     | Alloca _ ->
       (* Create fresh heap var for the alloca() call *)
       begin match man.ask (Queries.AllocVar Stack) with
         | `Lifted v -> (AllocaVars.add v (fst state), snd state)
         | _ -> state
       end
-    | _ -> state
+    | _ ->
+      (* Only deep [Free] accesses are recorded. The functions with a shallow one ([pthread_mutex_destroy], [regfree],
+         [inflateEnd], ...) destroy the object in place rather than free the block it lives in, and recording it would
+         make [pthread_mutex_destroy(m); free(m);] a double free. *)
+      LibraryDesc.Accesses.fold desc.accs (fun {kind; deep} exp state ->
+          match kind, deep with
+          | Free, true ->
+            (* The heap vars the argument points to are not recorded: the functions with a deep [Free] access either free
+               memory of the library, which has no heap var, or the contents of the object the argument points to
+               ([getline] the buffer in [*lineptr], [xdr_free] the members of [*objp]), not the object itself.
+               The freed contents can be a block of an excluded heap var if that heap var may stand for several blocks
+               ([Queries.IsMultiple]: every heap var at the default [ana.malloc.unique_address_count], and otherwise one
+               allocated in a loop, by an allocation wrapper called twice, or in a thread that is not unique), or if the
+               argument may point to several heap vars, one of which holds a pointer to the block another one stands for.
+               Neither case is recorded, and the call declares that. *)
+            let pointed_to = heap_vars_of man (man.ask (Queries.MayPointTo exp)) in
+            if HeapVars.cardinal pointed_to > 1 || HeapVars.exists (fun v -> man.ask (Queries.IsMultiple v)) pointed_to then
+              Assumptions.add "%s is assumed not to free a block allocated by the same malloc, calloc or realloc call as an object that %a may point to (the call inside an allocation wrapper, unless the wrapper is in ana.malloc.wrappers) (useAfterFree)" f.vname d_exp exp;
+            free_addresses man state f ~except:pointed_to (man.ask (Queries.ReachableFrom exp))
+          | _ -> state
+        ) arglist state
 
   let startstate v = D.bot ()
   let exitstate v = D.top ()
